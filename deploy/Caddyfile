@@ -1,0 +1,8 @@
+# Replace sync.example.com with your domain; point its DNS at this host.
+sync.example.com {
+  request_body {
+    max_size 5MB
+  }
+  header Strict-Transport-Security "max-age=31536000"
+  reverse_proxy 127.0.0.1:3000
+}

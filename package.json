@@ -1,0 +1,21 @@
+{
+  "name": "2du-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "test": "bun test",
+    "check": "tsc --noEmit",
+    "verify": "bun run check && bun test",
+    "backup": "bun run scripts/backup.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}

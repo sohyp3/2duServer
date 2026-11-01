@@ -1,0 +1,38 @@
+[Unit]
+Description=2du sync and agent API
+After=network.target
+
+[Service]
+Type=simple
+User=twodu
+Group=twodu
+WorkingDirectory=/opt/2duServer
+# Install Bun at this path or change ExecStart to its absolute location.
+ExecStart=/usr/local/bin/bun run src/index.ts
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+Environment=DATABASE_PATH=/var/lib/2du-server/2du.sqlite
+EnvironmentFile=/etc/2du-server.env
+StateDirectory=2du-server
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=true
+TasksMax=64
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
