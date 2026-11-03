@@ -32,17 +32,19 @@ Configuration is loaded from `.env` by Bun; real environment variables take prec
 
 ## Deployment
 
-Use your existing **Nginx** for HTTPS and proxy requests to `127.0.0.1:3000`. [deploy/nginx.conf](deploy/nginx.conf) includes HTTP-to-HTTPS redirection, request size limits, and per-client request/connection limits. Replace `sync.example.com` and the certificate paths with your domain and existing TLS certificate. Point the domain's DNS at your VPS. Keep port 3000 private. The server handles HTTP behind Nginx.
+Production runs at **https://2du.hyp3.cafe/api** (health: `https://2du.hyp3.cafe/api/health`; API: `https://2du.hyp3.cafe/api/v1/...`). Use that URL in the app's Sync settings. Docker Compose runs the API on `127.0.0.1:3000`, and the host's Nginx proxies `/api/` to it with the prefix stripped. [deploy/nginx.conf](deploy/nginx.conf) adds request size limits and per-client request/connection limits. Keep port 3000 private.
 
-On Debian/Ubuntu, install the config after replacing those placeholders:
+The config is HTTP only on purpose; `certbot --nginx` adds the HTTPS block, certificate and redirect, then renews them in place. On the VPS (code checked out at `/root/apps/2duServer`):
 
 ```sh
-sudo cp deploy/nginx.conf /etc/nginx/sites-available/2du-server
-sudo ln -s /etc/nginx/sites-available/2du-server /etc/nginx/sites-enabled/2du-server
-sudo nginx -t && sudo systemctl reload nginx
+cp deploy/nginx.conf /etc/nginx/sites-available/2du.hyp3.cafe
+ln -s /etc/nginx/sites-available/2du.hyp3.cafe /etc/nginx/sites-enabled/2du.hyp3.cafe
+nginx -t && systemctl reload nginx
+# After the domain's DNS points at the VPS:
+certbot --nginx -d 2du.hyp3.cafe
 ```
 
-The config must be included inside Nginx's `http` context. If your VPS uses `conf.d` instead of `sites-enabled`, install it as `/etc/nginx/conf.d/2du-server.conf` instead. Use only one copy. If your domain already has an Nginx server block, merge the proxy settings into it rather than adding a duplicate. The certificate must exist before `nginx -t` can pass; use your existing certificate setup and renewal process.
+To update: `git pull && docker compose up -d --build`. Do not re-copy the Nginx file after certbot has edited it; that would remove the HTTPS block.
 
 Application throttles use the actual socket IP and deliberately ignore forwarded headers. Behind Nginx, clients still share the application's proxy-IP limits; the Nginx limits add per-client protection. These assume clients connect directly to Nginx. Set up trusted real-IP handling separately if a CDN or another proxy sits in front.
 

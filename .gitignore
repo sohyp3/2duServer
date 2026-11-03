@@ -7,3 +7,6 @@ backups/
 *.sqlite*
 coverage/
 *.log
+
+# Local credentials (never commit)
+*.local.md
