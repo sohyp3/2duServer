@@ -32,7 +32,7 @@ Configuration is loaded from `.env` by Bun; real environment variables take prec
 
 ## Deployment
 
-Production runs at **https://2du.hyp3.cafe/api** (health: `https://2du.hyp3.cafe/api/health`; API: `https://2du.hyp3.cafe/api/v1/...`). Use that URL in the app's Sync settings. Docker Compose runs the API on `127.0.0.1:3000`, and the host's Nginx proxies `/api/` to it with the prefix stripped. [deploy/nginx.conf](deploy/nginx.conf) adds request size limits and per-client request/connection limits. Keep port 3000 private.
+Production runs at **https://2du.hyp3.cafe**. In the app's Sync settings enter the bare origin `https://2du.hyp3.cafe`; the app rejects URLs with a path. The API is also served under `/api` (`https://2du.hyp3.cafe/api/v1/...`) for agents and other clients. Docker Compose runs the API on `127.0.0.1:3000`; the host's Nginx proxies `/v1/` and `/health` to it unchanged, and `/api/` with the prefix stripped. Other paths return a JSON 404. [deploy/nginx.conf](deploy/nginx.conf) adds request size limits and per-client request/connection limits. Keep port 3000 private.
 
 The config is HTTP only on purpose; `certbot --nginx` adds the HTTPS block, certificate and redirect, then renews them in place. On the VPS (code checked out at `/root/apps/2duServer`):
 
