@@ -44,6 +44,15 @@ nginx -t && systemctl reload nginx
 certbot --nginx -d 2du.hyp3.cafe
 ```
 
+The **web app** is served from the same domain at `/`, as static files in `/root/apps/2du-web` on the VPS. In the web app's Sync settings, use `https://2du.hyp3.cafe`. To update it, build in the sibling `2du` repo and sync the output:
+
+```sh
+cd ../2du && bun run build:web
+rsync -a --delete --chmod=D755,F644 build/web/ root@194.163.176.223:/root/apps/2du-web/
+```
+
+No Nginx reload is needed. Web data lives in each browser's local database until it syncs.
+
 To update: `git pull && docker compose up -d --build`. Do not re-copy the Nginx file after certbot has edited it; that would remove the HTTPS block.
 
 Application throttles use the actual socket IP and deliberately ignore forwarded headers. Behind Nginx, clients still share the application's proxy-IP limits; the Nginx limits add per-client protection. These assume clients connect directly to Nginx. Set up trusted real-IP handling separately if a CDN or another proxy sits in front.
