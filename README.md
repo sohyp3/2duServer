@@ -32,7 +32,19 @@ Configuration is loaded from `.env` by Bun; real environment variables take prec
 
 ## Deployment
 
-Use HTTPS through a reverse proxy. [deploy/Caddyfile](deploy/Caddyfile) includes automatic HTTPS; replace its domain and point DNS at the host. Keep port 3000 private. The server handles HTTP behind the proxy. For a public deployment add per-client rate limits and connection limits at the ingress: application throttles use the actual socket IP and deliberately ignore all forwarded headers. Behind a proxy, clients share the proxy IP's limits.
+Use your existing **Nginx** for HTTPS and proxy requests to `127.0.0.1:3000`. [deploy/nginx.conf](deploy/nginx.conf) includes HTTP-to-HTTPS redirection, request size limits, and per-client request/connection limits. Replace `sync.example.com` and the certificate paths with your domain and existing TLS certificate. Point the domain's DNS at your VPS. Keep port 3000 private. The server handles HTTP behind Nginx.
+
+On Debian/Ubuntu, install the config after replacing those placeholders:
+
+```sh
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/2du-server
+sudo ln -s /etc/nginx/sites-available/2du-server /etc/nginx/sites-enabled/2du-server
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+The config must be included inside Nginx's `http` context. If your VPS uses `conf.d` instead of `sites-enabled`, install it as `/etc/nginx/conf.d/2du-server.conf` instead. Use only one copy. If your domain already has an Nginx server block, merge the proxy settings into it rather than adding a duplicate. The certificate must exist before `nginx -t` can pass; use your existing certificate setup and renewal process.
+
+Application throttles use the actual socket IP and deliberately ignore forwarded headers. Behind Nginx, clients still share the application's proxy-IP limits; the Nginx limits add per-client protection. These assume clients connect directly to Nginx. Set up trusted real-IP handling separately if a CDN or another proxy sits in front.
 
 Run with Docker:
 
@@ -45,7 +57,18 @@ curl http://127.0.0.1:3000/health
 
 The image runs as an unprivileged user; Compose uses a read-only filesystem, persistent volumes, dropped capabilities, resource limits, and a loopback-only published port. To register the first account, temporarily set `ALLOW_REGISTRATION=true` in `.env`, run `docker compose up -d --force-recreate`, create the account, then set false and recreate again. `docker compose down` preserves volumes; `down -v` deletes them.
 
-For a Linux service, [deploy/2du-server.service](deploy/2du-server.service) is a hardened systemd template. Install the code at `/opt/2duServer`, install Bun at `/usr/local/bin/bun`, create the `twodu` service user, and create `/etc/2du-server.env` from `.env.example` with mode `0600`. In that file use `DATABASE_PATH=/var/lib/2du-server/2du.sqlite`. The service creates its private state directory. Use either systemd or Docker for the API, then run Caddy on the host.
+For a Linux service, [deploy/2du-server.service](deploy/2du-server.service) is a hardened systemd template. Install the code at `/opt/2duServer`, install Bun at `/usr/local/bin/bun`, create the `twodu` service user, and create `/etc/2du-server.env` from `.env.example` with mode `0600`. In that file use `DATABASE_PATH=/var/lib/2du-server/2du.sqlite`. The service creates its private state directory. Use either systemd or Docker for the API, with your existing Nginx on the host.
+
+After preparing those paths and the service user:
+
+```sh
+sudo cp deploy/2du-server.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now 2du-server
+curl http://127.0.0.1:3000/health
+```
+
+Temporarily set `ALLOW_REGISTRATION=true` in `/etc/2du-server.env` and restart the service to create your account through the app using `https://YOUR_DOMAIN`. Then set it back to `false` and restart again. For Docker, use the `.env` registration steps above. Check the public endpoint with `curl https://YOUR_DOMAIN/health`, then use that HTTPS address in the app's Sync settings.
 
 ## Data and API
 
