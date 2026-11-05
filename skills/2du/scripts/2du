@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Minimal 2du API client. The key is passed to curl through a config stream, so
+# it never appears in argv or in this script's output.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'USAGE'
+usage:
+  2du GET    /v1/todos [key=value ...]    query values are URL-encoded for you
+  2du POST   /v1/notes '{"title":"x"}'    JSON body as an argument, or - for stdin
+  2du PATCH  /v1/todos/ID '{"status":"completed"}'
+  2du DELETE /v1/todos/ID
+
+env: TWODU_KEY (or a key in ~/.config/2du/key), TWODU_URL (default https://2du.hyp3.cafe)
+Prints the response body. On HTTP 4xx/5xx prints "HTTP <status>: <body>" to stderr and exits 1.
+USAGE
+  exit 2
+}
+
+[ $# -ge 2 ] || usage
+method=$1 path=$2
+shift 2
+case $path in /*) ;; *) usage ;; esac
+
+base=${TWODU_URL:-https://2du.hyp3.cafe}
+key=${TWODU_KEY:-}
+key_file=${XDG_CONFIG_HOME:-$HOME/.config}/2du/key
+if [ -z "$key" ] && [ -r "$key_file" ]; then
+  key=$(tr -d '[:space:]' <"$key_file")
+fi
+if [ -z "$key" ]; then
+  echo "2du: no API key. Set TWODU_KEY or write one to $key_file (create it in the app: Settings -> A key for your agent)." >&2
+  exit 2
+fi
+
+args=(-sS --max-time 30 -X "$method")
+case $method in
+  GET)
+    [ $# -eq 0 ] || args+=(-G)
+    for param in "$@"; do args+=(--data-urlencode "$param"); done
+    ;;
+  POST | PATCH)
+    [ $# -eq 1 ] || usage
+    args+=(-H 'Content-Type: application/json')
+    if [ "$1" = - ]; then
+      args+=(--data-binary @-)
+    else
+      args+=(--data-raw "$1")
+    fi
+    ;;
+  DELETE)
+    [ $# -eq 0 ] || usage
+    ;;
+  *) usage ;;
+esac
+
+body=$(mktemp)
+trap 'rm -f "$body"' EXIT
+status=$(curl "${args[@]}" -o "$body" -w '%{http_code}' \
+  --config <(printf 'header = "Authorization: Bearer %s"\n' "$key") \
+  "$base$path")
+
+if [ "$status" -ge 400 ]; then
+  echo "HTTP $status: $(cat "$body")" >&2
+  exit 1
+fi
+cat "$body"
+echo
