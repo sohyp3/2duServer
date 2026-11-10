@@ -9,7 +9,7 @@ const server = Bun.serve({
   hostname: config.host,
   port: config.port,
   maxRequestBodySize: MAX_BODY,
-  idleTimeout: 120,
+  idleTimeout: 30,
   fetch: (request, server) =>
     app.fetch(request, server.requestIP(request)?.address ?? 'unknown'),
   error: () => Response.json({ error: 'Server error' }, { status: 500 }),

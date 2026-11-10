@@ -11,7 +11,6 @@ import {
 
 import { loadConfig, type Config } from './config';
 import { createStore } from './store';
-import { runAgent } from './agent';
 import { HttpError, RateLimiter, readObject, exactFields } from './security';
 
 const passwordOptions = {
@@ -25,49 +24,13 @@ const dummyHash = Bun.password.hashSync(
 );
 const SESSION_MS = 90 * 86400000;
 const RENEW_AFTER_MS = 86400000;
-type AgentRequest = {
-  messages: { role: 'user' | 'assistant'; content: string }[];
-  tz: string;
-};
-function validAgentRequest(b: Record<string, unknown>): b is AgentRequest {
-  if (Object.keys(b).some((k) => !['messages', 'tz'].includes(k))) return false;
-  const { messages, tz } = b as Record<string, unknown>;
-  if (
-    !Array.isArray(messages) ||
-    messages.length < 1 ||
-    messages.length > 40 ||
-    !messages.every((m) => {
-      if (!m || typeof m !== 'object' || Array.isArray(m)) return false;
-      const { role, content } = m as Record<string, unknown>;
-      return (
-        Object.keys(m).sort().join() === 'content,role' &&
-        (role === 'user' || role === 'assistant') &&
-        typeof content === 'string' &&
-        [...content].length >= 1 &&
-        [...content].length <= 8000
-      );
-    }) ||
-    (messages.at(-1) as { role: string }).role !== 'user'
-  )
-    return false;
-  if (typeof tz !== 'string') return false;
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: tz });
-  } catch {
-    return false;
-  }
-  return true;
-}
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 const secret = () => randomBytes(32).toString('hex');
 export function createApp(
   path = loadConfig().databasePath,
-  options: Partial<Config> = {},
-  deps: { fetch?: typeof globalThis.fetch } = {}
+  options: Partial<Config> = {}
 ) {
   const config = { ...loadConfig(), ...options };
-  // `fetch` below is the request handler, so the global type is spelled out.
-  const providerFetch = deps.fetch ?? globalThis.fetch;
   if (path !== ':memory:')
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path, { create: true, strict: true });
@@ -141,20 +104,14 @@ export function createApp(
       )
         return send({ error: 'Not found' }, 404);
       const validRoute =
-        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|agent|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars)(?:\/[\w-]{1,128})?)$/.test(
+        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars)(?:\/[\w-]{1,128})?)$/.test(
           url.pathname
         );
       if (!validRoute) return send({ error: 'Not found' }, 404);
       const body = () =>
         readObject(
           req,
-          parts[1] === 'sync'
-            ? 5_000_000
-            : parts[1] === 'auth'
-              ? 8192
-              : parts[1] === 'agent'
-                ? 200_000
-                : 500_000
+          parts[1] === 'sync' ? 5_000_000 : parts[1] === 'auth' ? 8192 : 500_000
         );
       if (parts[1] === 'auth' && req.method === 'POST') {
         if (parts[2] === 'register' && !config.allowRegistration)
@@ -398,29 +355,6 @@ export function createApp(
           records: [...rows.values()].map(record),
           cursor,
         });
-      }
-      if (parts[1] === 'agent' && req.method === 'POST') {
-        if (!config.ai)
-          return send(
-            { error: 'The agent is not configured on this server' },
-            503
-          );
-        if (!requests.allow(`agent:${uid}`, 20, 60000)) {
-          headers['Retry-After'] = '60';
-          return send({ error: 'Too many agent requests' }, 429);
-        }
-        const b = await body();
-        if (!validAgentRequest(b))
-          return send({ error: 'Invalid agent request' }, 400);
-        const result = await runAgent({
-          store,
-          provider: config.ai,
-          fetchImpl: providerFetch,
-          uid,
-          messages: b.messages,
-          tz: b.tz,
-        });
-        return send({ reply: result.reply, changed: result.changed });
       }
       if (parts[1] === 'history' && req.method === 'GET')
         return send(
