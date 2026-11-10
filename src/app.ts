@@ -12,7 +12,14 @@ import {
 import { loadConfig, type Config } from './config';
 import { createStore } from './store';
 import { runAgent } from './agent';
-import { HttpError, RateLimiter, readObject, exactFields } from './security';
+import {
+  HttpError,
+  RateLimiter,
+  readBytes,
+  readObject,
+  exactFields,
+} from './security';
+import { transcribe } from './stt';
 
 const passwordOptions = {
   algorithm: 'argon2id',
@@ -25,6 +32,14 @@ const dummyHash = Bun.password.hashSync(
 );
 const SESSION_MS = 90 * 86400000;
 const RENEW_AFTER_MS = 86400000;
+const audioTypes = [
+  'audio/mp4',
+  'audio/m4a',
+  'audio/webm',
+  'audio/ogg',
+  'audio/wav',
+  'audio/mpeg',
+];
 type AgentRequest = {
   messages: { role: 'user' | 'assistant'; content: string }[];
   tz: string;
@@ -141,7 +156,7 @@ export function createApp(
       )
         return send({ error: 'Not found' }, 404);
       const validRoute =
-        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|agent|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars)(?:\/[\w-]{1,128})?)$/.test(
+        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|agent|transcribe|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars)(?:\/[\w-]{1,128})?)$/.test(
           url.pathname
         );
       if (!validRoute) return send({ error: 'Not found' }, 404);
@@ -421,6 +436,34 @@ export function createApp(
           tz: b.tz,
         });
         return send({ reply: result.reply, changed: result.changed });
+      }
+      if (parts[1] === 'transcribe' && req.method === 'POST') {
+        if (!config.stt)
+          return send(
+            { error: 'Transcription is not configured on this server' },
+            503
+          );
+        if (!requests.allow(`stt:${uid}`, 20, 60000)) {
+          headers['Retry-After'] = '60';
+          return send({ error: 'Too many transcription requests' }, 429);
+        }
+        const mime = (req.headers.get('content-type') ?? '')
+          .split(';')[0]!
+          .trim()
+          .toLowerCase();
+        if (!audioTypes.includes(mime))
+          return send(
+            {
+              error:
+                'Send audio as audio/mp4, audio/webm, audio/ogg, audio/wav or audio/mpeg',
+            },
+            415
+          );
+        const audio = await readBytes(req, 4_500_000);
+        if (audio.length === 0)
+          return send({ error: 'No audio received' }, 400);
+        const text = await transcribe(config.stt, audio, mime, providerFetch);
+        return send({ text });
       }
       if (parts[1] === 'history' && req.method === 'GET')
         return send(
