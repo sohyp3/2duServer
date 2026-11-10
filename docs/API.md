@@ -77,3 +77,15 @@ See [server operations](../README.md) for request sizes, registration configurat
 Device sessions only (API keys get 403): `GET /v1/prefs` returns `{brief_enabled, brief_time ("HH:MM"), brief_lang ("en"|"ar"), tz (IANA zone)}`; `PATCH /v1/prefs` takes any subset and returns the updated object. Invalid values get 400 `Invalid preferences`.
 
 `POST /v1/brief` (device session or write key, empty object body) builds today's brief in the user's `tz` and `brief_lang`, stores it as the `briefs` record for the local date (replacing an earlier one) and returns it. Limited to 6 per hour (429, `Retry-After: 600`). When `brief_enabled` is true the server also generates it automatically once `brief_time` has passed each local day.
+
+## Booking links (device sessions only)
+
+`GET /v1/booking` lists the account's links; `POST /v1/booking` creates one (201); `PATCH /v1/booking/{slug}` changes any field except `slug`; `DELETE /v1/booking/{slug}` removes it. An account may have 10 links; slugs are global (409 when taken). API keys get 403.
+
+Link fields: `slug` (3-40 chars of `a-z0-9-`, not `app`, `api`, `v1`, `assets`, `static`), `title` (1-100), `duration_min` (15, 20, 30, 45, 60, 90, 120), `days` (weekdays 0=Sunday..6, unique, at least one), `start` / `end` (`HH:MM` in `tz`, end after start), `tz` (IANA zone), `buffer_min` (0-120), `notice_min` (0-10080), `horizon_days` (1-60), `calendar_id` (where bookings go; falls back to `daily` if missing), `enabled`.
+
+A slot is free when it lies in the weekly window and does not overlap (with the buffer) an active task that has `time_needed`. Tasks without a duration do not block time.
+
+## Public booking (no authentication)
+
+`GET /v1/public/booking/{slug}?from=YYYY-MM-DD` returns `{title, duration_min, tz, from, days: 7, slots: [ISO...]}`; 404 for unknown or disabled links. `POST /v1/public/booking/{slug}` takes exactly `{start, name, contact, note, website}` (`website` is a honeypot and must be empty) and creates a task `Meeting: <name>` with a reminder; 409 when the slot was just taken, 429 when rate limited (5 per hour per IP, 30 per day per link). Visitors see a page at `/book/{slug}`.

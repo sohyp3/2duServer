@@ -11,6 +11,17 @@ import {
 
 import { loadConfig, type Config } from './config';
 import { createStore } from './store';
+import {
+  createLink,
+  deleteLink,
+  getLink,
+  listLinks,
+  updateLink,
+  validateLink,
+} from './booking';
+import { bookingCss, bookingHtml, bookingJs } from './booking-page';
+import { busyFromTodos, computeSlots, isSlotFree } from './slots';
+import { localDate } from './tz';
 import { buildBrief, saveBrief } from './brief';
 import { readPrefs, writePrefs } from './prefs';
 import { pick, scoreCandidates } from './pick';
@@ -48,6 +59,8 @@ export function createApp(
     CREATE TABLE IF NOT EXISTS records(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,entity,id));
     CREATE TABLE IF NOT EXISTS history(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, archived_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS prefs(user_id TEXT NOT NULL REFERENCES users(id), key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(user_id,key));
+    CREATE TABLE IF NOT EXISTS booking_links(slug TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), data TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS booking_links_user ON booking_links(user_id);
     CREATE INDEX IF NOT EXISTS tokens_user ON tokens(user_id,scope);
     CREATE INDEX IF NOT EXISTS history_user ON history(user_id,archived_at);
     CREATE INDEX IF NOT EXISTS history_record ON history(user_id,entity,id,updated_at);
@@ -107,8 +120,28 @@ export function createApp(
         (url.pathname !== '/' && url.pathname.endsWith('/'))
       )
         return send({ error: 'Not found' }, 404);
+      if (req.method === 'GET' && parts[0] === 'book' && parts.length === 2) {
+        const asset =
+          parts[1] === 'app.css'
+            ? [bookingCss, 'text/css; charset=utf-8']
+            : parts[1] === 'app.js'
+              ? [bookingJs, 'text/javascript; charset=utf-8']
+              : /^[a-z0-9-]{3,40}$/.test(parts[1])
+                ? [bookingHtml, 'text/html; charset=utf-8']
+                : null;
+        if (asset)
+          return new Response(asset[0], {
+            headers: {
+              ...headers,
+              'Content-Type': asset[1],
+              'Cache-Control': 'no-cache',
+              'Content-Security-Policy':
+                "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            },
+          });
+      }
       const validRoute =
-        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs)(?:\/[\w-]{1,128})?)$/.test(
+        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|booking(?:\/[a-z0-9-]{3,40})?|public\/booking\/[a-z0-9-]{3,40}|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs)(?:\/[\w-]{1,128})?)$/.test(
           url.pathname
         );
       if (!validRoute) return send({ error: 'Not found' }, 404);
@@ -213,6 +246,114 @@ export function createApp(
         } finally {
           activeAuth--;
         }
+      }
+      if (parts[1] === 'public' && parts[2] === 'booking') {
+        const slug = parts[3];
+        const now = new Date();
+        const found = getLink(db, slug);
+        if (req.method === 'GET') {
+          if (!requests.allow(`book-read:${clientIP}`, 60, 60000)) {
+            headers['Retry-After'] = '60';
+            return send({ error: 'Too many requests' }, 429);
+          }
+          if (!found || !found.link.enabled)
+            return send({ error: 'Not found' }, 404);
+          const today = localDate(now, found.link.tz);
+          let from = url.searchParams.get('from') ?? today;
+          if (
+            !/^\d{4}-\d{2}-\d{2}$/.test(from) ||
+            !Number.isFinite(Date.parse(`${from}T00:00:00Z`)) ||
+            new Date(`${from}T00:00:00Z`).toISOString().slice(0, 10) !== from
+          )
+            return send({ error: 'Invalid date' }, 400);
+          if (from < today) from = today;
+          const busy = busyFromTodos(store.list(found.uid, 'todos'));
+          return send({
+            title: found.link.title,
+            duration_min: found.link.duration_min,
+            tz: found.link.tz,
+            from,
+            days: 7,
+            slots: computeSlots(found.link, busy, now, from, 7),
+          });
+        }
+        if (req.method === 'POST') {
+          const tooMany = () => {
+            headers['Retry-After'] = '3600';
+            return send({ error: 'Too many bookings. Try again later.' }, 429);
+          };
+          if (
+            !attempts.allow(`book:${clientIP}`, 5, 3_600_000) ||
+            !attempts.allow(`book-link:${slug}`, 30, 86_400_000)
+          )
+            return tooMany();
+          const b = await readObject(req, 4096);
+          const invalid = () =>
+            send({ error: 'Check the form and try again' }, 400);
+          if (
+            Object.keys(b).length !== 5 ||
+            ['start', 'name', 'contact', 'note', 'website'].some(
+              (k) => typeof b[k] !== 'string'
+            )
+          )
+            return invalid();
+          const name = (b.name as string).trim(),
+            contact = (b.contact as string).trim(),
+            note = (b.note as string).trim();
+          if (
+            name.length < 1 ||
+            name.length > 80 ||
+            contact.length < 3 ||
+            contact.length > 120 ||
+            note.length > 500 ||
+            /[\u0000-\u001f\u007f]/.test(name + contact) ||
+            /[\u0000-\u0009\u000b-\u001f\u007f]/.test(note) ||
+            !/^\d{4}-/.test(b.start as string) ||
+            !Number.isFinite(Date.parse(b.start as string)) ||
+            new Date(b.start as string).toISOString() !== b.start
+          )
+            return invalid();
+          if (!found || !found.link.enabled)
+            return send({ error: 'Not found' }, 404);
+          if (b.website !== '')
+            return send(
+              {
+                ok: true,
+                start: b.start,
+                duration_min: found.link.duration_min,
+              },
+              201
+            );
+          const { link, uid: owner } = found;
+          const booked = db.transaction(() => {
+            const busy = busyFromTodos(store.list(owner, 'todos'));
+            if (!isSlotFree(link, busy, now, b.start as string)) return false;
+            const cal = store.get(owner, 'calendars', link.calendar_id)
+              ? link.calendar_id
+              : 'daily';
+            store.save(owner, 'todos', null, {
+              name: `Meeting: ${name}`,
+              datetime: b.start,
+              time_needed: link.duration_min,
+              calendar_id: cal,
+              priority: 'moderate',
+              status: 'pending',
+              remind_me: true,
+              description: `Booked through "${link.title}"\nContact: ${contact}${note ? `\n\n${note}` : ''}`,
+            });
+            return true;
+          })();
+          if (!booked)
+            return send(
+              { error: 'That time was just taken. Pick another.' },
+              409
+            );
+          return send(
+            { ok: true, start: b.start, duration_min: link.duration_min },
+            201
+          );
+        }
+        return send({ error: 'Not found' }, 404);
       }
       const bearer = /^Bearer ([a-f0-9]{64})$/.exec(
         req.headers.get('authorization') ?? ''
@@ -365,6 +506,24 @@ export function createApp(
           return send({ error: 'Sign in to manage preferences' }, 403);
         if (req.method === 'GET') return send(readPrefs(db, uid));
         if (req.method === 'PATCH') return send(writePrefs(db, uid, await body()));
+        return send({ error: 'Not found' }, 404);
+      }
+      if (parts[1] === 'booking') {
+        if (token.scope !== 'session')
+          return send({ error: 'Sign in to manage booking links' }, 403);
+        const slug = parts[2];
+        if (req.method === 'GET' && !slug) return send(listLinks(db, uid));
+        if (req.method === 'POST' && !slug) {
+          const link = validateLink(await body());
+          createLink(db, uid, link);
+          return send(link, 201);
+        }
+        if (req.method === 'PATCH' && slug)
+          return send(updateLink(db, uid, slug, await body()));
+        if (req.method === 'DELETE' && slug) {
+          deleteLink(db, uid, slug);
+          return send({ ok: true });
+        }
         return send({ error: 'Not found' }, 404);
       }
       if (parts[1] === 'brief') {

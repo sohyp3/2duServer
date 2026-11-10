@@ -112,3 +112,7 @@ Implementation references: [Bun password hashing](https://bun.sh/guides/util/has
 ## Daily briefs
 
 The server generates daily briefs in-process (a timer checks once a minute which users are due), so it must run as a single instance.
+
+## Booking links
+
+Visitors open `/book/<slug>`, served by this server through the `/book/` location in `deploy/nginx.conf`. Booking posts from the site's own origin, so the public site origin (for example `https://2du.hyp3.cafe`) must be listed in `ALLOWED_ORIGINS`. After changing the nginx config run `nginx -t` and reload nginx.
