@@ -11,6 +11,7 @@ export type Row = Record<string, unknown>;
 
 export interface ListFilters {
   calendar_id?: string;
+  goal_id?: string;
   from?: string;
   to?: string;
   status?: string;
@@ -110,6 +111,7 @@ export function createStore(db: Database) {
         (r) =>
           (filters.calendar_id === undefined ||
             r.calendar_id === filters.calendar_id) &&
+          (filters.goal_id === undefined || r.goal_id === filters.goal_id) &&
           (filters.from === undefined || (r.datetime as string) >= filters.from) &&
           (filters.to === undefined || (r.datetime as string) <= filters.to) &&
           (filters.status === undefined || r.status === filters.status)
@@ -163,10 +165,18 @@ export function createStore(db: Database) {
             parent_id: null,
             time_needed: null,
             calendar_id: 'daily',
+            goal_id: null,
           }
         : entity === 'notes'
           ? { content: '', pinned: false }
-          : { color: '#a7c968' };
+          : entity === 'goals'
+            ? {
+                description: null,
+                importance: 5,
+                weekly_target: null,
+                status: 'active',
+              }
+            : { color: '#a7c968' };
     const data = {
       ...defaults,
       ...old,

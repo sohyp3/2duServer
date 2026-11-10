@@ -21,13 +21,20 @@ Content-Type: application/json
 | `/v1/notes/{id}` | GET, PATCH, DELETE | Read, edit, pin, or delete a note |
 | `/v1/calendars` | GET, POST | List/create named, colored calendars |
 | `/v1/calendars/{id}` | GET, PATCH, DELETE | Rename, recolor, delete an empty calendar |
+| `/v1/goals` | GET, POST | List/create goals |
+| `/v1/goals/{id}` | GET, PATCH, DELETE | Read, edit, or delete a goal. Deleting a goal leaves its tasks alone |
+| `/v1/pick` | GET | Weighted random answer to "what should I do now?" |
 | `/v1/history` | GET | Latest 200 overwritten versions for recovery |
 
 Lists return arrays; single resources return objects; errors return `{ "error": "message" }` with an appropriate HTTP status. IDs and UTC ISO timestamps are server-generated on create and cannot be patched. Unknown fields are rejected. PATCH only sends changed fields. DELETE creates a sync tombstone. Calendar deletion returns 409 while tasks reference it.
 
-All lists support `?q=text` and `?random=1`. Task lists additionally support `calendar_id`, `status`, `from`, `to`. Date bounds are inclusive UTC ISO timestamps; encode query parameters. Omit bounds to inspect all tasks. Use calendar IDs from the calendar list. Local defaults use IDs `daily` and `work`, which appear after the first device sync.
+All lists support `?q=text` and `?random=1`. Task lists additionally support `calendar_id`, `goal_id`, `status`, `from`, `to`. Date bounds are inclusive UTC ISO timestamps; encode query parameters. Omit bounds to inspect all tasks. Use calendar IDs from the calendar list. Local defaults use IDs `daily` and `work`, which appear after the first device sync.
 
-Task fields: `name` (required), `description` (nullable), `datetime` (canonical UTC ISO), `time_needed` (nonnegative integer minutes or null), `priority` (`urgent`, `moderate`, `low`), `status` (`pending`, `in_progress`, `completed`, `cancelled`), `calendar_id` (default `daily`), `parent_id` (nullable task ID), `remind_me` (boolean; device-local scheduling limitation in ../README.md).
+Task fields: `name` (required), `description` (nullable), `datetime` (canonical UTC ISO), `time_needed` (nonnegative integer minutes or null), `priority` (`urgent`, `moderate`, `low`), `status` (`pending`, `in_progress`, `completed`, `cancelled`), `calendar_id` (default `daily`), `goal_id` (nullable goal ID; a goal ID matching no goal is treated as no goal), `parent_id` (nullable task ID), `remind_me` (boolean; device-local scheduling limitation in ../README.md).
+
+Goal fields: `name` (required, up to 200), `description` (nullable), `importance` (integer 1-10, default 5), `weekly_target` (null or integer 1-100 completed tasks per week), `status` (`active`, `paused`, `done`).
+
+`GET /v1/pick` (any scope) returns `{ "choice": Candidate | null, "alternatives": Candidate[] }`. Optional query parameters: `minutes` (integer 1-1440; skips tasks needing longer) and `week_start` (canonical UTC ISO start of the user's week; default the most recent Monday 00:00 UTC). A candidate is `{ kind: "todo" | "goal", id, name, goal_id, weight, reasons[] }`. The choice is a weighted random draw, so low-importance goals still surface occasionally; `alternatives` are the three heaviest other candidates.
 
 Note fields: `title` (required), `content` (Markdown string, default empty), `pinned` (boolean).
 

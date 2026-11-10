@@ -11,6 +11,7 @@ import {
 
 import { loadConfig, type Config } from './config';
 import { createStore } from './store';
+import { pick, scoreCandidates } from './pick';
 import { HttpError, RateLimiter, readObject, exactFields } from './security';
 
 const passwordOptions = {
@@ -104,7 +105,7 @@ export function createApp(
       )
         return send({ error: 'Not found' }, 404);
       const validRoute =
-        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars)(?:\/[\w-]{1,128})?)$/.test(
+        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals)(?:\/[\w-]{1,128})?)$/.test(
           url.pathname
         );
       if (!validRoute) return send({ error: 'Not found' }, 404);
@@ -356,6 +357,44 @@ export function createApp(
           cursor,
         });
       }
+      if (parts[1] === 'pick') {
+        if (req.method !== 'GET') return send({ error: 'Not found' }, 404);
+        const m = url.searchParams.get('minutes');
+        if (m !== null && !(/^\d{1,4}$/.test(m) && +m >= 1 && +m <= 1440))
+          throw new HttpError(400, 'Invalid minutes');
+        const ws = url.searchParams.get('week_start');
+        if (
+          ws !== null &&
+          !(
+            /^\d{4}-/.test(ws) &&
+            Number.isFinite(Date.parse(ws)) &&
+            new Date(ws).toISOString() === ws
+          )
+        )
+          throw new HttpError(400, 'Invalid week_start');
+        const now = new Date();
+        let weekStart: Date;
+        if (ws) weekStart = new Date(ws);
+        else {
+          weekStart = new Date(
+            Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+          );
+          weekStart = new Date(
+            weekStart.getTime() - ((now.getUTCDay() + 6) % 7) * 86_400_000
+          );
+        }
+        return send(
+          pick(
+            scoreCandidates({
+              todos: store.list(uid, 'todos') as any,
+              goals: store.list(uid, 'goals') as any,
+              now,
+              weekStart,
+              minutes: m === null ? null : +m,
+            })
+          )
+        );
+      }
       if (parts[1] === 'history' && req.method === 'GET')
         return send(
           db
@@ -376,6 +415,7 @@ export function createApp(
         }
         let rows = store.list(uid, entity, {
           calendar_id: url.searchParams.get('calendar_id') ?? undefined,
+          goal_id: url.searchParams.get('goal_id') ?? undefined,
           from: url.searchParams.get('from') ?? undefined,
           to: url.searchParams.get('to') ?? undefined,
           status: url.searchParams.get('status') ?? undefined,

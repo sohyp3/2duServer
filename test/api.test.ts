@@ -294,3 +294,34 @@ test('invalid sync cursors are rejected', async () => {
     ).toBe(400);
   }
 });
+
+test('goals CRUD, validation, goal_id filter and sync', async () => {
+  const g = await request('goals', 'POST', { name: 'Fitness' });
+  expect(g.status).toBe(201);
+  expect(g.body).toMatchObject({ importance: 5, weekly_target: null, status: 'active' });
+  const id = g.body.id;
+  expect((await request(`goals/${id}`, 'PATCH', { importance: 8, weekly_target: 3 })).body.importance).toBe(8);
+  for (const bad of [
+    { importance: 0 },
+    { importance: 11 },
+    { importance: 2.5 },
+    { weekly_target: 0 },
+    { status: 'nope' },
+  ])
+    expect((await request(`goals/${id}`, 'PATCH', bad)).status).toBe(400);
+  const t = await request('todos', 'POST', { name: 'run', goal_id: id });
+  expect(t.status).toBe(201);
+  expect((await request(`todos?goal_id=${id}`)).body).toHaveLength(1);
+  expect((await request('todos?goal_id=other')).body).toHaveLength(0);
+  expect((await request(`goals/${id}`, 'DELETE')).status).toBe(200);
+  expect((await request(`todos/${t.body.id}`)).body.goal_id).toBe(id);
+  const now = new Date().toISOString();
+  const sync = await request('sync', 'POST', {
+    changes: [
+      { entity: 'goals', id: 'g2', updated_at: now, data: { id: 'g2', name: 'Read', description: null, importance: 3, weekly_target: null, status: 'active', created_at: now, updated_at: now } },
+      { entity: 'todos', id: 't2', updated_at: now, data: { id: 't2', name: 'x', description: null, time_needed: null, priority: 'low', datetime: now, status: 'pending', parent_id: null, remind_me: false, calendar_id: 'daily', goal_id: 'g2', created_at: now, updated_at: now } },
+      { entity: 'todos', id: 't3', updated_at: now, data: { id: 't3', name: 'old', remind_me: false, priority: 'low', datetime: now, status: 'pending', created_at: now, updated_at: now } },
+    ],
+  });
+  expect(sync).toMatchObject({ status: 200 });
+});

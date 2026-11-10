@@ -1,6 +1,6 @@
 import { HttpError } from './security';
 
-export const entities = ['todos', 'notes', 'calendars'] as const;
+export const entities = ['todos', 'notes', 'calendars', 'goals'] as const;
 export type Entity = (typeof entities)[number];
 export interface Change {
   entity: Entity;
@@ -20,11 +20,22 @@ export const fields = {
     'parent_id',
     'remind_me',
     'calendar_id',
+    'goal_id',
     'created_at',
     'updated_at',
   ],
   notes: ['id', 'title', 'content', 'pinned', 'created_at', 'updated_at'],
   calendars: ['id', 'name', 'color', 'created_at', 'updated_at'],
+  goals: [
+    'id',
+    'name',
+    'description',
+    'importance',
+    'weekly_target',
+    'status',
+    'created_at',
+    'updated_at',
+  ],
 } satisfies Record<Entity, string[]>;
 
 export function validateChange(value: unknown): Change {
@@ -74,16 +85,35 @@ export function validateChange(value: unknown): Change {
       flag(d.remind_me);
       if (d.parent_id != null) identifier(d.parent_id);
       if (d.calendar_id != null) identifier(d.calendar_id);
+      if (d.goal_id != null) {
+        if (typeof d.goal_id !== 'string' || d.goal_id.length > 128)
+          throw new HttpError(400, 'Invalid reference');
+      }
     } else if (c.entity === 'notes') {
       text(d.title, 500);
       if (typeof d.content !== 'string')
         throw new HttpError(400, 'Invalid note content');
       text(d.content, 100000, true);
       flag(d.pinned);
-    } else {
+    } else if (c.entity === 'calendars') {
       text(d.name, 100);
       if (typeof d.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(d.color))
         throw new HttpError(400, 'Invalid calendar color');
+    } else if (c.entity === 'goals') {
+      text(d.name, 200);
+      text(d.description, 10000, true);
+      if (
+        !Number.isSafeInteger(d.importance) ||
+        Number(d.importance) < 1 ||
+        Number(d.importance) > 10 ||
+        (d.weekly_target != null &&
+          (!Number.isSafeInteger(d.weekly_target) ||
+            Number(d.weekly_target) < 1 ||
+            Number(d.weekly_target) > 100)) ||
+        typeof d.status !== 'string' ||
+        !['active', 'paused', 'done'].includes(d.status)
+      )
+        throw new HttpError(400, 'Invalid goal');
     }
   }
   return c;
