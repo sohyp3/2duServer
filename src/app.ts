@@ -35,7 +35,9 @@ export function createApp(
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path, { create: true, strict: true });
   if (path !== ':memory:') chmodSync(path, 0o600);
+  // The container's root filesystem is read-only, so SQLite must not need temp files.
   db.exec(`PRAGMA journal_mode=WAL;
+    PRAGMA temp_store=MEMORY;
     PRAGMA busy_timeout=5000;
     PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL);
