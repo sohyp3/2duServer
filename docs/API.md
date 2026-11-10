@@ -1,6 +1,6 @@
 # Connect an AI agent
 
-No model provider is built into 2du. Bring your agent and give it an account-scoped REST key from **Settings → A key for your agent**. The key is displayed once. Choose read-only for browsing or read & write to create/edit/delete. Revoke a key in Settings at any time. Agent keys cannot create keys, authenticate devices, or access other accounts. A read & write key can delete data; give it only to agents you trust.
+The built-in agent is optional. A server with an AI provider configured can run the agent for the app (see [Built-in agent](#built-in-agent)). External agents can always use the REST API. Bring your agent and give it an account-scoped REST key from **Settings → A key for your agent**. The key is displayed once. Choose read-only for browsing or read & write to create/edit/delete. Revoke a key in Settings at any time. Agent keys cannot create keys, authenticate devices, or access other accounts. A read & write key can delete data; give it only to agents you trust.
 
 The API is the supported integration; it is not an MCP transport. An agent with HTTP tools can call it directly, or an MCP gateway can wrap these routes. The agent interacts with server data; offline device edits arrive at the next successful sync.
 
@@ -55,6 +55,22 @@ curl -X PATCH "$TWODU_URL/v1/todos/TASK_ID" \
 ```
 
 Suggested agent instruction: “Use my 2du API to manage my tasks, calendars, and notes. Read relevant existing records before editing, use the user's timezone when translating dates, preserve unrelated fields, and report what changed. Never expose the API key.”
+
+## Built-in agent
+
+These routes exist only when the server has an AI provider configured (`AI_*` variables; see the [README](../README.md)). Without one, `POST /v1/agent` answers 503.
+
+`POST /v1/agent` takes a device session or a read & write key and a conversation, and lets the server's model read and change the account's tasks, notes and calendars:
+
+```http
+POST /v1/agent
+{ "messages": [{ "role": "user", "content": "Move my dentist task to Friday at 9" }],
+  "tz": "Asia/Riyadh" }
+```
+
+Answer: `{ "reply": "...", "changed": true }`. `messages` holds 1 to 40 items, each `role` `user` or `assistant` with 1 to 8,000 characters of `content`; the last item must be `user`. `tz` is an IANA time zone. The body is limited to 200,000 bytes, and each account may make 20 requests a minute (429 with `Retry-After`). Bad requests get 400 `Invalid agent request`. The server keeps no conversation history: send the messages each time. Replies are not streamed. When `changed` is true, run a sync so the device sees the edits.
+
+`POST /v1/transcribe` takes a device session or a read & write key and a raw audio body, not JSON. `Content-Type` must be `audio/mp4`, `audio/m4a`, `audio/webm`, `audio/ogg`, `audio/wav` or `audio/mpeg`. Answer: `{ "text": "..." }`. The body is limited to 4.5 MB and is not stored. The speech model detects Arabic or English. An empty transcript is `{ "text": "" }`. Other errors: 415 for an unsupported type, 413 for a large body, 400 `No audio received`, 502 when the provider fails, and 503 when speech is not configured.
 
 ## Device-only endpoints
 

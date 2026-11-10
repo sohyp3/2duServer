@@ -30,6 +30,13 @@ bun run backup            # consistent SQLite backup in backups/
 
 Configuration is loaded from `.env` by Bun; real environment variables take precedence. See [.env.example](.env.example). `HOST` defaults to `127.0.0.1`, `PORT` to `3000`, and `DATABASE_PATH` to `data/2du.sqlite`. `ALLOWED_ORIGINS` contains exact comma-separated browser origins, with no paths or wildcard. Set an empty value to permit only clients without an Origin header. Native requests omit Origin. CORS is a browser restriction; bearer authentication is required independently.
 
+The built-in agent and voice transcription are optional, and both are off when unset:
+
+- `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` enable `POST /v1/agent`. All three are needed together.
+- `STT_MODEL` enables `POST /v1/transcribe`. `STT_BASE_URL` and `STT_API_KEY` default to the `AI_` values.
+
+Any OpenAI-compatible API works. The speech model must support Arabic and English. Keys stay in the environment; never commit them.
+
 ## Deployment
 
 Production runs at **https://2du.hyp3.cafe**. In the app's Sync settings enter the bare origin `https://2du.hyp3.cafe`; the app rejects URLs with a path. The API is also served under `/api` (`https://2du.hyp3.cafe/api/v1/...`) for agents and other clients. Docker Compose runs the API on `127.0.0.1:3000`; the host's Nginx proxies `/v1/` and `/health` to it unchanged, and `/api/` with the prefix stripped. Other paths return a JSON 404. [deploy/nginx.conf](deploy/nginx.conf) adds request size limits and per-client request/connection limits. Keep port 3000 private.
