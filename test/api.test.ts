@@ -1,5 +1,6 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test';
 import { createApp } from '../src/app';
+import { createHash } from 'node:crypto';
 let app: ReturnType<typeof createApp>;
 let token: string;
 const request = async (
@@ -197,4 +198,40 @@ test('invalid batches are atomic; credentials, registration, CORS and schemas ch
     })
   );
   expect(cors.status).toBe(403);
+});
+
+test('device sessions slide forward while in use', async () => {
+  const sessionHash = createHash('sha256').update(token).digest('hex');
+  app.db
+    .query('UPDATE tokens SET expires=? WHERE hash=?')
+    .run(Date.now() + 5 * 86400000, sessionHash);
+  expect((await request('todos')).status).toBe(200);
+  const extended = app.db
+    .query('SELECT expires FROM tokens WHERE hash=?')
+    .get(sessionHash) as { expires: number };
+  expect(extended.expires - Date.now()).toBeGreaterThan(80 * 86400000);
+});
+
+test('expired device sessions are rejected and not extended', async () => {
+  const sessionHash = createHash('sha256').update(token).digest('hex');
+  const past = Date.now() - 1000;
+  app.db
+    .query('UPDATE tokens SET expires=? WHERE hash=?')
+    .run(past, sessionHash);
+  expect((await request('todos')).status).toBe(401);
+  const row = app.db
+    .query('SELECT expires FROM tokens WHERE hash=?')
+    .get(sessionHash) as { expires: number };
+  expect(row.expires).toBe(past);
+});
+
+test('API keys keep a null expiry after a request', async () => {
+  const key = (
+    await request('keys', 'POST', { name: 'assistant', scope: 'write' })
+  ).body;
+  expect((await request('todos', 'GET', undefined, key.key)).status).toBe(200);
+  const row = app.db
+    .query('SELECT expires FROM tokens WHERE hash=?')
+    .get(key.id) as { expires: number | null };
+  expect(row.expires).toBeNull();
 });

@@ -58,7 +58,7 @@ Suggested agent instruction: “Use my 2du API to manage my tasks, calendars, an
 
 ## Device-only endpoints
 
-`POST /v1/auth/register` (only when registration enabled) and `/v1/auth/login` accept `{username,password}` and return `{token,username}`. Session tokens can manage `/v1/keys` (GET list, POST `{name,scope}` where scope is `read`/`write`, DELETE `/v1/keys/{id}`). `DELETE /v1/session` revokes the current session. `POST /v1/sync` takes `{changes:[{entity,id,data,updated_at}]}` and returns `{records:[...]}` including tombstones (`data:null`). Agents use CRUD endpoints rather than device sync.
+`POST /v1/auth/register` (only when registration enabled) and `/v1/auth/login` accept `{username,password}` and return `{token,username}`. Session tokens can manage `/v1/keys` (GET list, POST `{name,scope}` where scope is `read`/`write`, DELETE `/v1/keys/{id}`). `DELETE /v1/session` revokes the current session. Device sessions last 90 days from last use; an authenticated request extends them, at most once a day. `POST /v1/sync` takes `{changes:[{entity,id,data,updated_at}]}` and returns `{records:[...]}` including tombstones (`data:null`). Agents use CRUD endpoints rather than device sync.
 
 ## Standalone server limits
 

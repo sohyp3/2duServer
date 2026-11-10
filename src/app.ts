@@ -22,6 +22,8 @@ const dummyHash = Bun.password.hashSync(
   randomBytes(32).toString('hex'),
   passwordOptions
 );
+const SESSION_MS = 90 * 86400000;
+const RENEW_AFTER_MS = 86400000;
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 const secret = () => randomBytes(32).toString('hex');
 export function createApp(
@@ -257,7 +259,7 @@ export function createApp(
             user.id,
             'Device session',
             'session',
-            Date.now() + 30 * 86400000,
+            Date.now() + SESSION_MS,
             new Date().toISOString()
           );
           return send({ token, username: key });
@@ -274,6 +276,15 @@ export function createApp(
         .get(hash(bearer)) as any;
       if (!token || (token.expires && token.expires <= Date.now()))
         return send({ error: 'Sign in again to sync' }, 401);
+      // Sliding session: renew at most once a day while the device is in use.
+      if (
+        token.scope === 'session' &&
+        token.expires - Date.now() < SESSION_MS - RENEW_AFTER_MS
+      )
+        db.query('UPDATE tokens SET expires=? WHERE hash=?').run(
+          Date.now() + SESSION_MS,
+          hash(bearer)
+        );
       const uid = token.user_id;
       if (req.method !== 'GET' && token.scope === 'read')
         return send({ error: 'This key is read-only' }, 403);
