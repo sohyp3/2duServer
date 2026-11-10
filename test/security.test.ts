@@ -462,3 +462,47 @@ test('concurrent registration cannot create duplicate users', async () => {
       .get()
   ).toEqual({ n: 1 });
 });
+
+test('AI and speech providers are off unless configured', () => {
+  const config = loadConfig({});
+  expect(config.ai).toBeNull();
+  expect(config.stt).toBeNull();
+});
+
+test('AI provider needs all three variables and drops a trailing slash', () => {
+  expect(
+    loadConfig({
+      AI_BASE_URL: 'https://api.example.com/v1/',
+      AI_API_KEY: 'key',
+      AI_MODEL: 'model',
+    }).ai
+  ).toEqual({
+    baseUrl: 'https://api.example.com/v1',
+    apiKey: 'key',
+    model: 'model',
+  });
+  for (const env of [
+    { AI_BASE_URL: 'https://api.example.com/v1' },
+    { AI_BASE_URL: 'https://api.example.com/v1', AI_API_KEY: 'key' },
+    { AI_BASE_URL: 'ftp://api.example.com', AI_API_KEY: 'k', AI_MODEL: 'm' },
+    { AI_BASE_URL: 'not a url', AI_API_KEY: 'k', AI_MODEL: 'm' },
+  ])
+    expect(() => loadConfig(env)).toThrow();
+});
+
+test('speech provider inherits the AI base URL and key', () => {
+  const config = loadConfig({
+    AI_BASE_URL: 'https://api.example.com/v1',
+    AI_API_KEY: 'key',
+    AI_MODEL: 'model',
+    STT_MODEL: 'whisper',
+  });
+  expect(config.stt).toEqual({
+    baseUrl: 'https://api.example.com/v1',
+    apiKey: 'key',
+    model: 'whisper',
+  });
+  expect(() => loadConfig({ STT_MODEL: 'whisper' })).toThrow(
+    'STT needs a base URL and an API key'
+  );
+});

@@ -1,9 +1,29 @@
+export interface Provider {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
 export interface Config {
   host: string;
   port: number;
   databasePath: string;
   allowRegistration: boolean;
   allowedOrigins: string[];
+  ai: Provider | null;
+  stt: Provider | null;
+}
+
+function baseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('AI_BASE_URL must be an http or https URL');
+  }
+  if (!['http:', 'https:'].includes(url.protocol))
+    throw new Error('AI_BASE_URL must be an http or https URL');
+  return value.replace(/\/+$/, '');
 }
 
 export function loadConfig(
@@ -33,11 +53,37 @@ export function loadConfig(
   const databasePath = env.DATABASE_PATH ?? 'data/2du.sqlite';
   if (!host || !databasePath)
     throw new Error('HOST and DATABASE_PATH cannot be empty');
+  const aiParts = [env.AI_BASE_URL, env.AI_API_KEY, env.AI_MODEL];
+  const aiSet = aiParts.filter((v) => v !== undefined && v !== '').length;
+  if (aiSet !== 0 && aiSet !== 3)
+    throw new Error('Set AI_BASE_URL, AI_API_KEY and AI_MODEL together');
+  const ai: Provider | null =
+    aiSet === 3
+      ? {
+          baseUrl: baseUrl(env.AI_BASE_URL!),
+          apiKey: env.AI_API_KEY!,
+          model: env.AI_MODEL!,
+        }
+      : null;
+  let stt: Provider | null = null;
+  if (env.STT_MODEL) {
+    const sttBase = env.STT_BASE_URL || env.AI_BASE_URL;
+    const sttKey = env.STT_API_KEY || env.AI_API_KEY;
+    if (!sttBase || !sttKey)
+      throw new Error('STT needs a base URL and an API key');
+    stt = {
+      baseUrl: baseUrl(sttBase),
+      apiKey: sttKey,
+      model: env.STT_MODEL,
+    };
+  }
   return {
     host,
     port,
     databasePath,
     allowedOrigins,
     allowRegistration: env.ALLOW_REGISTRATION === 'true',
+    ai,
+    stt,
   };
 }
