@@ -235,3 +235,62 @@ test('API keys keep a null expiry after a request', async () => {
     .get(key.id) as { expires: number | null };
   expect(row.expires).toBeNull();
 });
+
+test('sync with a since cursor returns only changed records', async () => {
+  const first = await request('sync', 'POST', { changes: [] });
+  expect(first.body.cursor).toBe(0);
+  const note = (await request('notes', 'POST', { title: 'Cursor' })).body;
+  const full = await request('sync', 'POST', { changes: [] });
+  expect(full.body.cursor).toBeGreaterThan(0);
+  expect(full.body.records.map((r: any) => r.id)).toContain(note.id);
+  expect(full.body.records[0].rev).toBeUndefined();
+  const idle = await request('sync', 'POST', {
+    changes: [],
+    since: full.body.cursor,
+  });
+  expect(idle.body).toEqual({ records: [], cursor: full.body.cursor });
+});
+
+test('records written by agents appear in the next delta sync', async () => {
+  const cursor = (await request('sync', 'POST', { changes: [] })).body.cursor;
+  const key = (
+    await request('keys', 'POST', { name: 'assistant', scope: 'write' })
+  ).body;
+  const todo = (await request('todos', 'POST', { name: 'Delta' }, key.key))
+    .body;
+  const delta = await request('sync', 'POST', { changes: [], since: cursor });
+  expect(delta.body.records.map((r: any) => r.id)).toEqual([todo.id]);
+  expect(delta.body.cursor).toBeGreaterThan(cursor);
+});
+
+test('a losing submitted change is echoed back for delta sync', async () => {
+  const note = (await request('notes', 'POST', { title: 'Original' })).body;
+  const cursor = (await request('sync', 'POST', { changes: [] })).body.cursor;
+  const older = new Date(Date.now() - 10000).toISOString();
+  const stale = { ...note, title: 'Stale edit', updated_at: older };
+  const result = await request('sync', 'POST', {
+    changes: [{ entity: 'notes', id: note.id, data: stale, updated_at: older }],
+    since: cursor,
+  });
+  expect(result.body.records).toHaveLength(1);
+  expect(result.body.records[0].id).toBe(note.id);
+  expect(result.body.records[0].data.title).toBe('Original');
+});
+
+test('deletions reach a client syncing with an older cursor', async () => {
+  const note = (await request('notes', 'POST', { title: 'Gone' })).body;
+  const cursor = (await request('sync', 'POST', { changes: [] })).body.cursor;
+  expect((await request(`notes/${note.id}`, 'DELETE')).status).toBe(200);
+  const delta = await request('sync', 'POST', { changes: [], since: cursor });
+  expect(delta.body.records).toEqual([
+    { entity: 'notes', id: note.id, data: null, updated_at: expect.any(String) },
+  ]);
+});
+
+test('invalid sync cursors are rejected', async () => {
+  for (const since of [-1, 1.5, '3']) {
+    expect(
+      (await request('sync', 'POST', { changes: [], since })).status
+    ).toBe(400);
+  }
+});

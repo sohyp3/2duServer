@@ -40,18 +40,33 @@ export function createApp(
     PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write')), expires INTEGER, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS records(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, PRIMARY KEY(user_id,entity,id));
+    CREATE TABLE IF NOT EXISTS records(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,entity,id));
     CREATE TABLE IF NOT EXISTS history(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, archived_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS tokens_user ON tokens(user_id,scope);
     CREATE INDEX IF NOT EXISTS history_user ON history(user_id,archived_at);
     CREATE INDEX IF NOT EXISTS history_record ON history(user_id,entity,id,updated_at);
-    PRAGMA user_version=1;
   `);
+  // Existing databases predate records.rev; CREATE TABLE IF NOT EXISTS skips them.
+  db.transaction(() => {
+    const columns = db.query('PRAGMA table_info(records)').all() as {
+      name: string;
+    }[];
+    if (!columns.some((c) => c.name === 'rev'))
+      db.exec(`ALTER TABLE records ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+        UPDATE records SET rev=1 WHERE rev=0;`);
+    db.exec(`CREATE INDEX IF NOT EXISTS records_rev ON records(user_id,rev);
+      PRAGMA user_version=2;`);
+  })();
   const allowed = config.allowedOrigins;
   const attempts = new RateLimiter();
   const requests = new RateLimiter();
   let activeAuth = 0;
   const merge = db.transaction((uid: string, changes: Change[]) => {
+    let rev = (
+      db
+        .query('SELECT COALESCE(MAX(rev),0) AS rev FROM records WHERE user_id=?')
+        .get(uid) as { rev: number }
+    ).rev;
     const usage = db
       .query(
         'SELECT COUNT(*) AS n, COALESCE(SUM(length(CAST(data AS BLOB))),0) AS bytes FROM records WHERE user_id=?'
@@ -104,13 +119,9 @@ export function createApp(
           new Date().toISOString()
         );
       if (wins)
-        db.query('INSERT OR REPLACE INTO records VALUES(?,?,?,?,?)').run(
-          uid,
-          c.entity,
-          c.id,
-          data,
-          c.updated_at
-        );
+        db.query(
+          'INSERT OR REPLACE INTO records(user_id,entity,id,data,updated_at,rev) VALUES(?,?,?,?,?,?)'
+        ).run(uid, c.entity, c.id, data, c.updated_at, ++rev);
     }
     db.query(
       'DELETE FROM history WHERE user_id=? AND rowid NOT IN (SELECT rowid FROM history WHERE user_id=? ORDER BY archived_at DESC, rowid DESC LIMIT 2000)'
@@ -360,9 +371,15 @@ export function createApp(
             403
           );
         const b = await body();
-        exactFields(b, ['changes']);
+        exactFields(b, ['changes', 'since']);
         if (!Array.isArray(b.changes) || b.changes.length > 10000)
           return send({ error: 'Invalid sync batch' }, 400);
+        const since = b.since as number | undefined;
+        if (
+          since !== undefined &&
+          !(Number.isSafeInteger(since) && since >= 0)
+        )
+          return send({ error: 'Invalid sync cursor' }, 400);
         const changes = b.changes.map(validateChange);
         if (
           changes.some(
@@ -374,11 +391,37 @@ export function createApp(
             400
           );
         merge(uid, changes);
+        const cursor = (
+          db
+            .query('SELECT COALESCE(MAX(rev),0) AS rev FROM records WHERE user_id=?')
+            .get(uid) as { rev: number }
+        ).rev;
+        if (since === undefined)
+          return send({
+            records: db
+              .query('SELECT * FROM records WHERE user_id=?')
+              .all(uid)
+              .map(record),
+            cursor,
+          });
+        // Submitted changes are echoed back even when they lost, so the client can
+        // clear its queued edit.
+        const rows = new Map<string, any>();
+        const key = (r: { entity: string; id: string }) =>
+          `${r.entity}\u0000${r.id}`;
+        for (const r of db
+          .query('SELECT * FROM records WHERE user_id=? AND rev>?')
+          .all(uid, since))
+          rows.set(key(r as any), r);
+        for (const c of changes) {
+          const r = db
+            .query('SELECT * FROM records WHERE user_id=? AND entity=? AND id=?')
+            .get(uid, c.entity, c.id);
+          if (r) rows.set(key(c), r);
+        }
         return send({
-          records: db
-            .query('SELECT * FROM records WHERE user_id=?')
-            .all(uid)
-            .map(record),
+          records: [...rows.values()].map(record),
+          cursor,
         });
       }
       if (parts[1] === 'history' && req.method === 'GET')

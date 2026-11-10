@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { Database } from 'bun:sqlite';
 import { createApp } from '../src/app';
 
@@ -103,6 +104,67 @@ test('real HTTP, restart persistence, consistent live backup, and restore', asyn
   } finally {
     await server.stop(true);
     app.db.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('databases created before revisions gain rev=1 rows and a cursor', async () => {
+  const directory = mkdtempSync(join(tmpdir(), '2du-server-'));
+  const path = join(directory, 'old.sqlite');
+  const bearer = 'a'.repeat(64);
+  const old = new Database(path, { create: true, strict: true });
+  old.exec(`
+    CREATE TABLE users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL);
+    CREATE TABLE tokens(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write')), expires INTEGER, created_at TEXT NOT NULL);
+    CREATE TABLE records(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, PRIMARY KEY(user_id,entity,id));
+    CREATE TABLE history(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, archived_at TEXT NOT NULL);
+    PRAGMA user_version=1;
+  `);
+  const when = new Date().toISOString();
+  old.query('INSERT INTO users VALUES(?,?,?)').run('u1', 'owner', 'x');
+  old
+    .query('INSERT INTO tokens VALUES(?,?,?,?,?,?)')
+    .run(
+      createHash('sha256').update(bearer).digest('hex'),
+      'u1',
+      'Device session',
+      'session',
+      Date.now() + 86400000,
+      when
+    );
+  old
+    .query('INSERT INTO records VALUES(?,?,?,?,?)')
+    .run('u1', 'notes', 'n1', JSON.stringify({ id: 'n1', title: 'one' }), when);
+  old
+    .query('INSERT INTO records VALUES(?,?,?,?,?)')
+    .run('u1', 'notes', 'n2', null, when);
+  old.close();
+  try {
+    const app = createApp(path, { allowRegistration: false });
+    try {
+      expect(app.db.query('PRAGMA user_version').get()).toEqual({
+        user_version: 2,
+      });
+      expect(
+        app.db.query('SELECT rev FROM records ORDER BY id').all()
+      ).toEqual([{ rev: 1 }, { rev: 1 }]);
+      const response = await app.fetch(
+        new Request('http://localhost/v1/sync', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearer}`,
+          },
+          body: JSON.stringify({ changes: [], since: 0 }),
+        })
+      );
+      const body = await response.json();
+      expect(body.cursor).toBe(1);
+      expect(body.records.map((r: any) => r.id)).toEqual(['n1', 'n2']);
+    } finally {
+      app.db.close();
+    }
+  } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 });

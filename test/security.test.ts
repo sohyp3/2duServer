@@ -395,7 +395,7 @@ test('record limit rolls back the complete batch when quota is exceeded', async 
   app.db
     .query(
       `WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<19999)
-    INSERT INTO records SELECT ?, 'notes', 'seed-'||n, NULL, '2026-01-01T00:00:00.000Z' FROM ids`
+    INSERT INTO records(user_id,entity,id,data,updated_at) SELECT ?, 'notes', 'seed-'||n, NULL, '2026-01-01T00:00:00.000Z' FROM ids`
     )
     .run(uid);
   const now = new Date().toISOString();
