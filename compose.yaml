@@ -11,12 +11,6 @@ services:
       DATABASE_PATH: /app/data/2du.sqlite
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
-      AI_BASE_URL: ${AI_BASE_URL:-}
-      AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-}
-      STT_BASE_URL: ${STT_BASE_URL:-}
-      STT_API_KEY: ${STT_API_KEY:-}
-      STT_MODEL: ${STT_MODEL:-}
     volumes:
       - data:/app/data
       - backups:/app/backups
