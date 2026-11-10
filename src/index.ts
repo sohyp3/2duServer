@@ -1,5 +1,6 @@
 import { createApp } from './app';
 import { loadConfig } from './config';
+import { startScheduler } from './scheduler';
 import { MAX_BODY } from './security';
 
 process.umask(0o077);
@@ -14,11 +15,13 @@ const server = Bun.serve({
     app.fetch(request, server.requestIP(request)?.address ?? 'unknown'),
   error: () => Response.json({ error: 'Server error' }, { status: 500 }),
 });
+const stopScheduler = startScheduler(app);
 console.log(`2duServer listening on ${server.url}`);
 let stopping = false;
 async function shutdown() {
   if (stopping) return;
   stopping = true;
+  stopScheduler();
   const timeout = setTimeout(() => process.exit(1), 10_000);
   timeout.unref();
   await server.stop();

@@ -108,3 +108,7 @@ Passwords use Argon2id (64 MiB, three passes); random 256-bit bearer tokens are 
 This service is for self-hosted personal use. Data is readable by the server; use encrypted disks/backups for protection at rest. TLS is provided by your proxy. Rate limits are per process and reset on restart. The service does not include account recovery, email verification, password changes, or a distributed abuse-control service. Keep registration closed, dependencies/runtime patched, and the database private.
 
 Implementation references: [Bun password hashing](https://bun.sh/guides/util/hash-a-password) and [OWASP REST security guidance](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html).
+
+## Daily briefs
+
+The server generates daily briefs in-process (a timer checks once a minute which users are due), so it must run as a single instance.

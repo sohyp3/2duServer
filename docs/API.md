@@ -24,6 +24,7 @@ Content-Type: application/json
 | `/v1/goals` | GET, POST | List/create goals |
 | `/v1/goals/{id}` | GET, PATCH, DELETE | Read, edit, or delete a goal. Deleting a goal leaves its tasks alone |
 | `/v1/pick` | GET | Weighted random answer to "what should I do now?" |
+| `/v1/briefs` | GET | Daily briefs, one per local date (`id` = `date`; fields `date`, `content` up to 20,000 chars). Written by the server; clients normally only read them |
 | `/v1/history` | GET | Latest 200 overwritten versions for recovery |
 
 Lists return arrays; single resources return objects; errors return `{ "error": "message" }` with an appropriate HTTP status. IDs and UTC ISO timestamps are server-generated on create and cannot be patched. Unknown fields are rejected. PATCH only sends changed fields. DELETE creates a sync tombstone. Calendar deletion returns 409 while tasks reference it.
@@ -70,3 +71,9 @@ Suggested agent instruction: “Use my 2du API to manage my tasks, calendars, an
 ## Standalone server limits
 
 See [server operations](../README.md) for request sizes, registration configuration, throttles, account quotas, history retention, backup, and HTTPS deployment. Requests with JSON bodies must use `Content-Type: application/json`. Unsupported routes return 404. Throttled requests return 429 and `Retry-After`; size violations return 413, unsupported content types return 415, and account quota conflicts return 409. Sync payloads allow only `changes`; change objects allow only `entity`, `id`, `data`, and `updated_at`.
+
+## Preferences and daily brief
+
+Device sessions only (API keys get 403): `GET /v1/prefs` returns `{brief_enabled, brief_time ("HH:MM"), brief_lang ("en"|"ar"), tz (IANA zone)}`; `PATCH /v1/prefs` takes any subset and returns the updated object. Invalid values get 400 `Invalid preferences`.
+
+`POST /v1/brief` (device session or write key, empty object body) builds today's brief in the user's `tz` and `brief_lang`, stores it as the `briefs` record for the local date (replacing an earlier one) and returns it. Limited to 6 per hour (429, `Retry-After: 600`). When `brief_enabled` is true the server also generates it automatically once `brief_time` has passed each local day.

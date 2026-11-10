@@ -132,6 +132,7 @@ export function createStore(db: Database) {
     id: string | null,
     patch: Row
   ): { data: Row; created: boolean } {
+    const created = !id;
     const oldRow = id
       ? (db
           .query('SELECT * FROM records WHERE user_id=? AND entity=? AND id=?')
@@ -150,6 +151,12 @@ export function createStore(db: Database) {
       )
     )
       throw new HttpError(400, 'Invalid fields');
+    if (entity === 'briefs' && !id) {
+      const date = patch?.date;
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+        throw new HttpError(400, 'Invalid brief');
+      id = date;
+    }
     const now = new Date(
         Math.max(Date.now(), oldRow ? Date.parse(oldRow.updated_at) + 1 : 0)
       ).toISOString(),
@@ -169,7 +176,9 @@ export function createStore(db: Database) {
           }
         : entity === 'notes'
           ? { content: '', pinned: false }
-          : entity === 'goals'
+          : entity === 'briefs'
+            ? { content: '' }
+            : entity === 'goals'
             ? {
                 description: null,
                 importance: 5,
@@ -187,7 +196,7 @@ export function createStore(db: Database) {
     };
     const change = validateChange({ entity, id: rid, data, updated_at: now });
     merge(uid, [change]);
-    return { data, created: !id };
+    return { data, created };
   }
 
   function remove(uid: string, entity: Entity, id: string): void {

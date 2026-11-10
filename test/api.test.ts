@@ -325,3 +325,17 @@ test('goals CRUD, validation, goal_id filter and sync', async () => {
   });
   expect(sync).toMatchObject({ status: 200 });
 });
+
+test('briefs sync and validation', async () => {
+  const now = new Date().toISOString();
+  const rec = (id: string, date: string, content = 'hi') => ({
+    entity: 'briefs',
+    id,
+    updated_at: now,
+    data: { id, date, content, created_at: now, updated_at: now },
+  });
+  expect((await request('sync', 'POST', { changes: [rec('2026-11-10', '2026-11-10')] })).status).toBe(200);
+  expect((await request('briefs')).body).toHaveLength(1);
+  expect((await request('sync', 'POST', { changes: [rec('2026-11-10', '2026-11-11')] })).status).toBe(400);
+  expect((await request('sync', 'POST', { changes: [rec('2026-11-12', '2026-11-12', 'x'.repeat(20001))] })).status).toBe(400);
+});

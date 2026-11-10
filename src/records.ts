@@ -1,6 +1,6 @@
 import { HttpError } from './security';
 
-export const entities = ['todos', 'notes', 'calendars', 'goals'] as const;
+export const entities = ['todos', 'notes', 'calendars', 'goals', 'briefs'] as const;
 export type Entity = (typeof entities)[number];
 export interface Change {
   entity: Entity;
@@ -26,6 +26,7 @@ export const fields = {
   ],
   notes: ['id', 'title', 'content', 'pinned', 'created_at', 'updated_at'],
   calendars: ['id', 'name', 'color', 'created_at', 'updated_at'],
+  briefs: ['id', 'date', 'content', 'created_at', 'updated_at'],
   goals: [
     'id',
     'name',
@@ -114,6 +115,15 @@ export function validateChange(value: unknown): Change {
         !['active', 'paused', 'done'].includes(d.status)
       )
         throw new HttpError(400, 'Invalid goal');
+    } else if (c.entity === 'briefs') {
+      if (
+        typeof d.date !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(d.date) ||
+        d.date !== c.id ||
+        typeof d.content !== 'string' ||
+        d.content.length > 20000
+      )
+        throw new HttpError(400, 'Invalid brief');
     }
   }
   return c;

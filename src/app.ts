@@ -11,6 +11,8 @@ import {
 
 import { loadConfig, type Config } from './config';
 import { createStore } from './store';
+import { buildBrief, saveBrief } from './brief';
+import { readPrefs, writePrefs } from './prefs';
 import { pick, scoreCandidates } from './pick';
 import { HttpError, RateLimiter, readObject, exactFields } from './security';
 
@@ -45,6 +47,7 @@ export function createApp(
     CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write')), expires INTEGER, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS records(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,entity,id));
     CREATE TABLE IF NOT EXISTS history(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, archived_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS prefs(user_id TEXT NOT NULL REFERENCES users(id), key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(user_id,key));
     CREATE INDEX IF NOT EXISTS tokens_user ON tokens(user_id,scope);
     CREATE INDEX IF NOT EXISTS history_user ON history(user_id,archived_at);
     CREATE INDEX IF NOT EXISTS history_record ON history(user_id,entity,id,updated_at);
@@ -105,7 +108,7 @@ export function createApp(
       )
         return send({ error: 'Not found' }, 404);
       const validRoute =
-        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals)(?:\/[\w-]{1,128})?)$/.test(
+        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs)(?:\/[\w-]{1,128})?)$/.test(
           url.pathname
         );
       if (!validRoute) return send({ error: 'Not found' }, 404);
@@ -356,6 +359,32 @@ export function createApp(
           records: [...rows.values()].map(record),
           cursor,
         });
+      }
+      if (parts[1] === 'prefs') {
+        if (token.scope !== 'session')
+          return send({ error: 'Sign in to manage preferences' }, 403);
+        if (req.method === 'GET') return send(readPrefs(db, uid));
+        if (req.method === 'PATCH') return send(writePrefs(db, uid, await body()));
+        return send({ error: 'Not found' }, 404);
+      }
+      if (parts[1] === 'brief') {
+        if (req.method !== 'POST') return send({ error: 'Not found' }, 404);
+        exactFields(await body(), []);
+        if (!requests.allow(`brief:${uid}`, 6, 3_600_000)) {
+          headers['Retry-After'] = '600';
+          return send({ error: 'Too many requests' }, 429);
+        }
+        const prefs = readPrefs(db, uid);
+        const now = new Date();
+        const brief = buildBrief({
+          store,
+          uid,
+          tz: prefs.tz,
+          lang: prefs.brief_lang,
+          now,
+        });
+        saveBrief(store, uid, brief, now);
+        return send(store.get(uid, 'briefs', brief.date));
       }
       if (parts[1] === 'pick') {
         if (req.method !== 'GET') return send({ error: 'Not found' }, 404);
