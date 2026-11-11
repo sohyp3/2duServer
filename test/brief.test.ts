@@ -74,6 +74,8 @@ test('render en and ar, omitting empty sections', () => {
   expect(ar).toContain('write report');
   expect(en).toContain('## Today');
   expect(ar).toContain('## اليوم');
+  expect(ar.split('\n')[0]).toContain(`، ${d.date}`);
+  expect(en.split('\n')[0]).toContain(`, ${d.date}`);
   expect(en).not.toContain('Overdue');
   expect(en).not.toContain('Goals this week');
   expect(renderBrief({ ...d, today: [], suggestion: null }, 'en')).toContain(

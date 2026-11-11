@@ -157,8 +157,12 @@ export const bookingJs = `(function () {
           say("You're booked. " + fmtFull.format(new Date(state.chosen)));
           return;
         }
-        say(r.body.error || 'Something went wrong.', true);
-        if (r.status === 409) { $('form').hidden = true; load(state.from); }
+        var msg = r.body.error || 'Something went wrong.';
+        say(msg, true);
+        if (r.status === 409) {
+          $('form').hidden = true;
+          load(state.from).then(function () { say(msg, true); });
+        }
       })
       .catch(function () { $('confirm').disabled = false; say('Could not reach the server.', true); });
   });

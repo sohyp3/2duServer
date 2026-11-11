@@ -94,6 +94,7 @@ const text = {
   en: {
     days: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
     greeting: 'Good morning',
+    comma: ',',
     today: 'Today',
     nothing: 'Nothing scheduled.',
     overdue: 'Overdue',
@@ -104,6 +105,7 @@ const text = {
   ar: {
     days: ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'],
     greeting: 'صباح الخير',
+    comma: '،',
     today: 'اليوم',
     nothing: 'لا يوجد شيء مجدول.',
     overdue: 'متأخرة',
@@ -115,7 +117,7 @@ const text = {
 
 export function renderBrief(data: BriefData, lang: 'en' | 'ar'): string {
   const t = text[lang];
-  const out = [`${t.greeting}! ${t.days[data.weekday]}, ${data.date}`, ''];
+  const out = [`${t.greeting}! ${t.days[data.weekday]}${t.comma} ${data.date}`, ''];
   out.push(`## ${t.today}`);
   if (!data.today.length) out.push(t.nothing);
   for (const x of data.today)

@@ -90,13 +90,11 @@ export function scoreCandidates(input: {
   };
 
   const out: Candidate[] = [];
-  const goalsWithActive = new Set<string>();
   for (const t of todos) {
     if (!isActive(t)) continue;
     const g = t.goal_id ? goalById.get(t.goal_id) : undefined;
     if (g && g.status !== 'active') continue;
     const s = g ? stats.get(g.id)! : undefined;
-    if (s) goalsWithActive.add(g!.id);
     if (
       minutes !== null &&
       typeof t.time_needed === 'number' &&
