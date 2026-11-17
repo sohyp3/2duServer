@@ -2,16 +2,12 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import {
-  entities,
-  validateChange,
-  type Change,
-  type Entity,
-} from './records';
+import { entities, validateChange, type Change, type Entity } from './records';
 
 import { loadConfig, type Config } from './config';
 import { createStore } from './store';
 import {
+  type BookingLink,
   createLink,
   deleteLink,
   getLink,
@@ -55,7 +51,7 @@ export function createApp(
     PRAGMA busy_timeout=5000;
     PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write')), expires INTEGER, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write','book')), expires INTEGER, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS records(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,entity,id));
     CREATE TABLE IF NOT EXISTS history(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, archived_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS prefs(user_id TEXT NOT NULL REFERENCES users(id), key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(user_id,key));
@@ -65,6 +61,21 @@ export function createApp(
     CREATE INDEX IF NOT EXISTS history_user ON history(user_id,archived_at);
     CREATE INDEX IF NOT EXISTS history_record ON history(user_id,entity,id,updated_at);
   `);
+  // Older databases have a tokens CHECK without the 'book' scope; SQLite can't
+  // alter a CHECK, so rebuild the table. Nothing references tokens.
+  db.transaction(() => {
+    const t = db
+      .query(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='tokens'"
+      )
+      .get() as { sql: string } | null;
+    if (t && !t.sql.includes("'book'"))
+      db.exec(`CREATE TABLE tokens_new(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write','book')), expires INTEGER, created_at TEXT NOT NULL);
+        INSERT INTO tokens_new SELECT hash,user_id,name,scope,expires,created_at FROM tokens;
+        DROP TABLE tokens;
+        ALTER TABLE tokens_new RENAME TO tokens;
+        CREATE INDEX IF NOT EXISTS tokens_user ON tokens(user_id,scope);`);
+  })();
   // Existing databases predate records.rev; CREATE TABLE IF NOT EXISTS skips them.
   db.transaction(() => {
     const columns = db.query('PRAGMA table_info(records)').all() as {
@@ -141,7 +152,7 @@ export function createApp(
           });
       }
       const validRoute =
-        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|booking(?:\/[a-z0-9-]{3,40})?|public\/booking\/[a-z0-9-]{3,40}|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs)(?:\/[\w-]{1,128})?)$/.test(
+        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|booking(?:\/[a-z0-9-]{3,40})?|public\/booking\/[a-z0-9-]{3,40}|agent\/booking(?:\/[a-z0-9-]{3,40})?|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs)(?:\/[\w-]{1,128})?)$/.test(
           url.pathname
         );
       if (!validRoute) return send({ error: 'Not found' }, 404);
@@ -247,6 +258,58 @@ export function createApp(
           activeAuth--;
         }
       }
+      const validFrom = (from: string) =>
+        /^\d{4}-\d{2}-\d{2}$/.test(from) &&
+        Number.isFinite(Date.parse(`${from}T00:00:00Z`)) &&
+        new Date(`${from}T00:00:00Z`).toISOString().slice(0, 10) === from;
+      const bookingUrl = (slug: string) =>
+        `${req.headers.get('x-forwarded-proto') === 'https' ? 'https' : url.protocol.slice(0, -1)}://${url.host}/book/${slug}`;
+      /** Creates the booking task. False when the slot is no longer free. */
+      const placeBooking = (
+        owner: string,
+        link: BookingLink,
+        start: string,
+        name: string,
+        contact: string,
+        note: string,
+        via: string,
+        now: Date
+      ) =>
+        db.transaction(() => {
+          const busy = busyFromTodos(store.list(owner, 'todos'));
+          if (!isSlotFree(link, busy, now, start)) return false;
+          const cal = store.get(owner, 'calendars', link.calendar_id)
+            ? link.calendar_id
+            : 'daily';
+          store.save(owner, 'todos', null, {
+            name: `Meeting: ${name}`,
+            datetime: start,
+            time_needed: link.duration_min,
+            calendar_id: cal,
+            priority: 'moderate',
+            status: 'pending',
+            remind_me: true,
+            description: `Booked ${via}"${link.title}"\nContact: ${contact}${note ? `\n\n${note}` : ''}`,
+          });
+          return true;
+        })();
+      const badGuest = (
+        name: string,
+        contact: string,
+        note: string,
+        start: unknown
+      ) =>
+        name.length < 1 ||
+        name.length > 80 ||
+        contact.length < 3 ||
+        contact.length > 120 ||
+        note.length > 500 ||
+        /[\u0000-\u001f\u007f]/.test(name + contact) ||
+        /[\u0000-\u0009\u000b-\u001f\u007f]/.test(note) ||
+        typeof start !== 'string' ||
+        !/^\d{4}-/.test(start) ||
+        !Number.isFinite(Date.parse(start)) ||
+        new Date(start).toISOString() !== start;
       if (parts[1] === 'public' && parts[2] === 'booking') {
         const slug = parts[3];
         const now = new Date();
@@ -260,12 +323,7 @@ export function createApp(
             return send({ error: 'Not found' }, 404);
           const today = localDate(now, found.link.tz);
           let from = url.searchParams.get('from') ?? today;
-          if (
-            !/^\d{4}-\d{2}-\d{2}$/.test(from) ||
-            !Number.isFinite(Date.parse(`${from}T00:00:00Z`)) ||
-            new Date(`${from}T00:00:00Z`).toISOString().slice(0, 10) !== from
-          )
-            return send({ error: 'Invalid date' }, 400);
+          if (!validFrom(from)) return send({ error: 'Invalid date' }, 400);
           if (from < today) from = today;
           const busy = busyFromTodos(store.list(found.uid, 'todos'));
           return send({
@@ -300,19 +358,7 @@ export function createApp(
           const name = (b.name as string).trim(),
             contact = (b.contact as string).trim(),
             note = (b.note as string).trim();
-          if (
-            name.length < 1 ||
-            name.length > 80 ||
-            contact.length < 3 ||
-            contact.length > 120 ||
-            note.length > 500 ||
-            /[\u0000-\u001f\u007f]/.test(name + contact) ||
-            /[\u0000-\u0009\u000b-\u001f\u007f]/.test(note) ||
-            !/^\d{4}-/.test(b.start as string) ||
-            !Number.isFinite(Date.parse(b.start as string)) ||
-            new Date(b.start as string).toISOString() !== b.start
-          )
-            return invalid();
+          if (badGuest(name, contact, note, b.start)) return invalid();
           if (!found || !found.link.enabled)
             return send({ error: 'Not found' }, 404);
           if (b.website !== '')
@@ -325,24 +371,16 @@ export function createApp(
               201
             );
           const { link, uid: owner } = found;
-          const booked = db.transaction(() => {
-            const busy = busyFromTodos(store.list(owner, 'todos'));
-            if (!isSlotFree(link, busy, now, b.start as string)) return false;
-            const cal = store.get(owner, 'calendars', link.calendar_id)
-              ? link.calendar_id
-              : 'daily';
-            store.save(owner, 'todos', null, {
-              name: `Meeting: ${name}`,
-              datetime: b.start,
-              time_needed: link.duration_min,
-              calendar_id: cal,
-              priority: 'moderate',
-              status: 'pending',
-              remind_me: true,
-              description: `Booked through "${link.title}"\nContact: ${contact}${note ? `\n\n${note}` : ''}`,
-            });
-            return true;
-          })();
+          const booked = placeBooking(
+            owner,
+            link,
+            b.start as string,
+            name,
+            contact,
+            note,
+            'through ',
+            now
+          );
           if (!booked)
             return send(
               { error: 'That time was just taken. Pick another.' },
@@ -374,6 +412,12 @@ export function createApp(
           hash(bearer)
         );
       const uid = token.user_id;
+      // A booking key sees free times on its owner's links and books them. Nothing else.
+      if (token.scope === 'book' && parts[1] !== 'agent')
+        return send(
+          { error: 'This key can only see free times and make bookings' },
+          403
+        );
       if (req.method !== 'GET' && token.scope === 'read')
         return send({ error: 'This key is read-only' }, 403);
       if (!requests.allow(`user:${uid}`, 300, 60000)) {
@@ -404,10 +448,10 @@ export function createApp(
             typeof b.name !== 'string' ||
             !b.name.trim() ||
             b.name.length > 100 ||
-            (b.scope !== 'read' && b.scope !== 'write')
+            !['read', 'write', 'book'].includes(b.scope as string)
           )
             return send(
-              { error: 'Provide a key name and read/write scope' },
+              { error: 'Provide a key name and read, write or book scope' },
               400
             );
           const count = db
@@ -452,10 +496,7 @@ export function createApp(
         if (!Array.isArray(b.changes) || b.changes.length > 10000)
           return send({ error: 'Invalid sync batch' }, 400);
         const since = b.since as number | undefined;
-        if (
-          since !== undefined &&
-          !(Number.isSafeInteger(since) && since >= 0)
-        )
+        if (since !== undefined && !(Number.isSafeInteger(since) && since >= 0))
           return send({ error: 'Invalid sync cursor' }, 400);
         const changes = b.changes.map(validateChange);
         if (
@@ -470,7 +511,9 @@ export function createApp(
         merge(uid, changes);
         const cursor = (
           db
-            .query('SELECT COALESCE(MAX(rev),0) AS rev FROM records WHERE user_id=?')
+            .query(
+              'SELECT COALESCE(MAX(rev),0) AS rev FROM records WHERE user_id=?'
+            )
             .get(uid) as { rev: number }
         ).rev;
         if (since === undefined)
@@ -492,7 +535,9 @@ export function createApp(
           rows.set(key(r as any), r);
         for (const c of changes) {
           const r = db
-            .query('SELECT * FROM records WHERE user_id=? AND entity=? AND id=?')
+            .query(
+              'SELECT * FROM records WHERE user_id=? AND entity=? AND id=?'
+            )
             .get(uid, c.entity, c.id);
           if (r) rows.set(key(c), r);
         }
@@ -505,7 +550,114 @@ export function createApp(
         if (token.scope !== 'session')
           return send({ error: 'Sign in to manage preferences' }, 403);
         if (req.method === 'GET') return send(readPrefs(db, uid));
-        if (req.method === 'PATCH') return send(writePrefs(db, uid, await body()));
+        if (req.method === 'PATCH')
+          return send(writePrefs(db, uid, await body()));
+        return send({ error: 'Not found' }, 404);
+      }
+      if (parts[1] === 'agent') {
+        if (token.scope !== 'book' && token.scope !== 'session')
+          return send({ error: 'Use a booking key' }, 403);
+        const slug = parts[3];
+        const now = new Date();
+        if (req.method === 'GET' && !slug)
+          return send(
+            listLinks(db, uid)
+              .filter((l) => l.enabled)
+              .map((l) => ({
+                slug: l.slug,
+                title: l.title,
+                duration_min: l.duration_min,
+                tz: l.tz,
+                url: bookingUrl(l.slug),
+              }))
+          );
+        const found = slug ? getLink(db, slug) : null;
+        if (!found || found.uid !== uid || !found.link.enabled)
+          return send({ error: 'Not found' }, 404);
+        const { link } = found;
+        if (req.method === 'GET') {
+          const today = localDate(now, link.tz);
+          let from = url.searchParams.get('from') ?? today;
+          const d = url.searchParams.get('days') ?? '7';
+          if (!validFrom(from) || !/^(?:[1-9]|1[0-4])$/.test(d))
+            return send({ error: 'Invalid date or days (1-14)' }, 400);
+          if (from < today) from = today;
+          return send({
+            title: link.title,
+            duration_min: link.duration_min,
+            tz: link.tz,
+            url: bookingUrl(link.slug),
+            from,
+            days: +d,
+            slots: computeSlots(
+              link,
+              busyFromTodos(store.list(uid, 'todos')),
+              now,
+              from,
+              +d
+            ),
+          });
+        }
+        if (req.method === 'POST') {
+          if (
+            !attempts.allow(`agent-book:${token.hash}`, 30, 3_600_000) ||
+            !attempts.allow(`agent-book-day:${token.hash}`, 100, 86_400_000)
+          ) {
+            headers['Retry-After'] = '3600';
+            return send({ error: 'Too many bookings. Try again later.' }, 429);
+          }
+          const b = await readObject(req, 4096);
+          const keysOk =
+            Object.keys(b).every((k) =>
+              ['start', 'name', 'contact', 'note'].includes(k)
+            ) &&
+            ['start', 'name', 'contact'].every(
+              (k) => typeof b[k] === 'string'
+            ) &&
+            (b.note === undefined || typeof b.note === 'string');
+          const name = keysOk ? (b.name as string).trim() : '',
+            contact = keysOk ? (b.contact as string).trim() : '',
+            note = keysOk ? ((b.note as string) ?? '').trim() : '';
+          if (!keysOk || badGuest(name, contact, note, b.start))
+            return send(
+              {
+                error:
+                  'Send {start, name, contact, note?}: start is a slot from GET, name 1-80 chars, contact 3-120, note up to 500',
+              },
+              400
+            );
+          if (
+            !placeBooking(
+              uid,
+              link,
+              b.start as string,
+              name,
+              contact,
+              note,
+              `by agent "${token.name}" through `,
+              now
+            )
+          )
+            return send(
+              {
+                error:
+                  'That time is not free. Fetch the slots and pick another.',
+              },
+              409
+            );
+          return send(
+            {
+              ok: true,
+              start: b.start,
+              end: new Date(
+                Date.parse(b.start as string) + link.duration_min * 60_000
+              ).toISOString(),
+              duration_min: link.duration_min,
+              title: link.title,
+            },
+            201
+          );
+        }
         return send({ error: 'Not found' }, 404);
       }
       if (parts[1] === 'booking') {

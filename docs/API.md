@@ -66,7 +66,7 @@ Suggested agent instruction: “Use my 2du API to manage my tasks, calendars, an
 
 ## Device-only endpoints
 
-`POST /v1/auth/register` (only when registration enabled) and `/v1/auth/login` accept `{username,password}` and return `{token,username}`. Session tokens can manage `/v1/keys` (GET list, POST `{name,scope}` where scope is `read`/`write`, DELETE `/v1/keys/{id}`). `DELETE /v1/session` revokes the current session. Device sessions last 90 days from last use; an authenticated request extends them, at most once a day. `POST /v1/sync` takes `{changes:[{entity,id,data,updated_at}]}` and returns `{records:[...],cursor}` including tombstones (`data:null`). `cursor` is the account's latest revision number. Send `since` (a non-negative integer, the last `cursor` you received) to get only what changed: `records` then holds the records revised after `since`, plus the server copy of every record you submitted in `changes`, so a stale edit still gets its queued change cleared. Without `since` the whole account is returned. Invalid `since` values get 400 `Invalid sync cursor`. Revision numbers are not part of record responses. Agents use CRUD endpoints rather than device sync.
+`POST /v1/auth/register` (only when registration enabled) and `/v1/auth/login` accept `{username,password}` and return `{token,username}`. Session tokens can manage `/v1/keys` (GET list, POST `{name,scope}` where scope is `read`/`write`/`book`, DELETE `/v1/keys/{id}`). `DELETE /v1/session` revokes the current session. Device sessions last 90 days from last use; an authenticated request extends them, at most once a day. `POST /v1/sync` takes `{changes:[{entity,id,data,updated_at}]}` and returns `{records:[...],cursor}` including tombstones (`data:null`). `cursor` is the account's latest revision number. Send `since` (a non-negative integer, the last `cursor` you received) to get only what changed: `records` then holds the records revised after `since`, plus the server copy of every record you submitted in `changes`, so a stale edit still gets its queued change cleared. Without `since` the whole account is returned. Invalid `since` values get 400 `Invalid sync cursor`. Revision numbers are not part of record responses. Agents use CRUD endpoints rather than device sync.
 
 ## Standalone server limits
 
@@ -89,3 +89,11 @@ A slot is free when it lies in the weekly window and does not overlap (with the 
 ## Public booking (no authentication)
 
 `GET /v1/public/booking/{slug}?from=YYYY-MM-DD` returns `{title, duration_min, tz, from, days: 7, slots: [ISO...]}`; 404 for unknown or disabled links. `POST /v1/public/booking/{slug}` takes exactly `{start, name, contact, note, website}` (`website` is a honeypot and must be empty) and creates a task `Meeting: <name>` with a reminder; 409 when the slot was just taken, 429 when rate limited (5 per hour per IP, 30 per day per link). Visitors see a page at `/book/{slug}`.
+
+## Agent booking (`book` keys)
+
+A `book` key is for a reservation agent (n8n, a chatbot). It can see free times on its owner's enabled booking links and book them, and gets 403 on every other route: it cannot read or change tasks, notes, calendars, titles of existing events, or link settings. Create one with a session token: `POST /v1/keys {"name":"n8n","scope":"book"}`.
+
+- `GET /v1/agent/booking` lists enabled links: `[{slug, title, duration_min, tz, url}]`. `url` is the public page to send a customer.
+- `GET /v1/agent/booking/{slug}?from=YYYY-MM-DD&days=1-14` returns `{title, duration_min, tz, url, from, days, slots: [ISO...]}`. Defaults: today in the link's zone, 7 days.
+- `POST /v1/agent/booking/{slug}` takes `{start, name, contact, note?}` (`start` exactly as listed in `slots`) and returns 201 `{ok, start, end, duration_min, title}`. The task is created like a public booking and its description says which key booked it. 409 when the time is not free, 400 for bad input, 404 for links of other accounts. Limits: 30 bookings an hour and 100 a day per key.
