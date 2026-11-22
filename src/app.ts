@@ -202,14 +202,18 @@ export function createApp(
         });
       }
       const validRoute =
-        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|booking(?:\/[a-z0-9-]{3,40})?|public\/booking\/[a-z0-9-]{3,40}|agent\/booking(?:\/[a-z0-9-]{3,40})?|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs|goal_categories)(?:\/[\w-]{1,128})?)$/.test(
+        /^\/v1\/(?:auth\/(?:login|register)|account(?:\/password)?|session|sync|history|pick|prefs|brief|booking(?:\/[a-z0-9-]{3,40})?|public\/booking\/[a-z0-9-]{3,40}|agent\/booking(?:\/[a-z0-9-]{3,40})?|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs|goal_categories)(?:\/[\w-]{1,128})?)$/.test(
           url.pathname
         );
       if (!validRoute) return send({ error: 'Not found' }, 404);
       const body = () =>
         readObject(
           req,
-          parts[1] === 'sync' ? 5_000_000 : parts[1] === 'auth' ? 8192 : 500_000
+          parts[1] === 'sync'
+            ? 5_000_000
+            : parts[1] === 'auth' || parts[1] === 'account'
+              ? 8192
+              : 500_000
         );
       if (parts[1] === 'auth' && req.method === 'POST') {
         if (parts[2] === 'register' && !config.allowRegistration)
@@ -220,6 +224,23 @@ export function createApp(
         if (!attempts.allow(`ip:${clientIP}`, 30, 60000)) {
           headers['Retry-After'] = '60';
           return send({ error: 'Too many authentication attempts' }, 429);
+        }
+        if (parts[2] === 'register') {
+          if (!attempts.allow(`signup:${clientIP}`, 5, 3_600_000)) {
+            headers['Retry-After'] = '3600';
+            return send(
+              {
+                error: 'Too many sign-ups from this network. Try again later.',
+              },
+              429
+            );
+          }
+          if (
+            config.maxUsers &&
+            (db.query('SELECT COUNT(*) AS n FROM users').get() as { n: number })
+              .n >= config.maxUsers
+          )
+            return send({ error: 'This server is full' }, 403);
         }
         const input = await body();
         exactFields(input, ['username', 'password']);
@@ -509,6 +530,85 @@ export function createApp(
           return send({ error: 'Sign in to manage sessions' }, 403);
         db.query('DELETE FROM tokens WHERE hash=?').run(hash(bearer));
         return send({ ok: true });
+      }
+      if (
+        parts[1] === 'account' &&
+        ((parts[2] === 'password' && req.method === 'POST') ||
+          (!parts[2] && req.method === 'DELETE'))
+      ) {
+        if (token.scope !== 'session')
+          return send({ error: 'Sign in to manage your account' }, 403);
+        const input = await body();
+        const changing = parts[2] === 'password';
+        exactFields(input, changing ? ['current', 'next'] : ['password']);
+        const password = changing ? input.current : input.password;
+        if (
+          typeof password !== 'string' ||
+          password.length > 1024 ||
+          (changing &&
+            (typeof input.next !== 'string' ||
+              input.next.length < 10 ||
+              input.next.length > 1024))
+        )
+          return send(
+            { error: 'Use a password of at least 10 characters.' },
+            400
+          );
+        const user = db
+          .query('SELECT username,password FROM users WHERE id=?')
+          .get(uid) as { username: string; password: string };
+        if (!attempts.allow(`user:${user.username}`, 10, 900000)) {
+          headers['Retry-After'] = '900';
+          return send(
+            { error: 'Too many attempts. Try again in 15 minutes.' },
+            429
+          );
+        }
+        if (activeAuth >= 4) {
+          headers['Retry-After'] = '1';
+          return send(
+            { error: 'Authentication is busy. Try again shortly.' },
+            429
+          );
+        }
+        activeAuth++;
+        try {
+          if (!(await Bun.password.verify(password, user.password)))
+            return send(
+              {
+                error: changing
+                  ? 'Current password is wrong'
+                  : 'Password is wrong',
+              },
+              401
+            );
+          if (changing) {
+            const next = await Bun.password.hash(
+              input.next as string,
+              passwordOptions
+            );
+            db.transaction(() => {
+              db.query('UPDATE users SET password=? WHERE id=?').run(next, uid);
+              db.query(
+                "DELETE FROM tokens WHERE user_id=? AND scope='session' AND hash!=?"
+              ).run(uid, hash(bearer));
+            })();
+          } else
+            db.transaction(() => {
+              for (const table of [
+                'records',
+                'history',
+                'prefs',
+                'booking_links',
+                'tokens',
+              ])
+                db.query(`DELETE FROM ${table} WHERE user_id=?`).run(uid);
+              db.query('DELETE FROM users WHERE id=?').run(uid);
+            })();
+          return send({ ok: true });
+        } finally {
+          activeAuth--;
+        }
       }
       if (parts[1] === 'keys') {
         if (token.scope !== 'session')

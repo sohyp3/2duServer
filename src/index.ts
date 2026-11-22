@@ -1,7 +1,7 @@
 import { createApp } from './app';
 import { loadConfig } from './config';
 import { startScheduler } from './scheduler';
-import { MAX_BODY } from './security';
+import { clientAddress, MAX_BODY } from './security';
 
 process.umask(0o077);
 const config = loadConfig();
@@ -12,7 +12,14 @@ const server = Bun.serve({
   maxRequestBodySize: MAX_BODY,
   idleTimeout: 30,
   fetch: (request, server) =>
-    app.fetch(request, server.requestIP(request)?.address ?? 'unknown'),
+    app.fetch(
+      request,
+      clientAddress(
+        request,
+        server.requestIP(request)?.address ?? 'unknown',
+        config.trustProxy
+      )
+    ),
   error: () => Response.json({ error: 'Server error' }, { status: 500 }),
 });
 const stopScheduler = startScheduler(app);

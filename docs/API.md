@@ -72,6 +72,15 @@ Suggested agent instruction: “Use my 2du API to manage my tasks, calendars, an
 
 `POST /v1/auth/register` (only when registration enabled) and `/v1/auth/login` accept `{username,password}` and return `{token,username}`. Session tokens can manage `/v1/keys` (see [Key scopes](#key-scopes)). `DELETE /v1/session` revokes the current session. Device sessions last 90 days from last use; an authenticated request extends them, at most once a day. `POST /v1/sync` takes `{changes:[{entity,id,data,updated_at}]}` and returns `{records:[...],cursor}` including tombstones (`data:null`). `cursor` is the account's latest revision number. Send `since` (a non-negative integer, the last `cursor` you received) to get only what changed: `records` then holds the records revised after `since`, plus the server copy of every record you submitted in `changes`, so a stale edit still gets its queued change cleared. Without `since` the whole account is returned. Invalid `since` values get 400 `Invalid sync cursor`. Revision numbers are not part of record responses. Agents use CRUD endpoints rather than device sync.
 
+## Account (device sessions only)
+
+Both routes accept only a device session token; any API key gets 403. Both are throttled like sign-in (10 attempts per username per 15 minutes, 429) and share the server's limit on concurrent password checks.
+
+- `POST /v1/account/password` takes exactly `{current, next}`. `next` must be 10-1024 characters (400 otherwise). A wrong `current` gets 401 `Current password is wrong`. On success it stores the new password, signs out every other device session of the account (the current one stays signed in), keeps all API keys, and returns `{ok: true}`.
+- `DELETE /v1/account` takes exactly `{password}`. A wrong password gets 401 `Password is wrong`. On success it permanently deletes the account and all its data (records, history, preferences, booking links, sessions and keys) in one transaction and returns `{ok: true}`. Later requests with any of its tokens get 401.
+
+Sign-up (`POST /v1/auth/register`) is limited to 5 per client IP per hour (429 `Too many sign-ups from this network. Try again later.`). When the server sets `MAX_USERS` and that many accounts exist, sign-up gets 403 `This server is full`. Behind a reverse proxy on the same host, set `TRUST_PROXY=true` so rate limits use the proxy's `X-Real-IP` header; it is only read from loopback connections.
+
 ## Key scopes
 
 | Scope | Can do |

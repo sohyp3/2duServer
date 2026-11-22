@@ -495,3 +495,135 @@ test('last_used is set after the first request with a key', async () => {
   const used = (await find()).last_used;
   expect(Date.parse(used)).toBeGreaterThan(Date.now() - 60000);
 });
+
+test('changing the password keeps this session and keys, revokes other sessions', async () => {
+  const other = (
+    await request(
+      'auth/login',
+      'POST',
+      { username: 'owner', password: 'long-test-password' },
+      ''
+    )
+  ).body.token;
+  const key = (
+    await request('keys', 'POST', { name: 'assistant', scope: 'read' })
+  ).body.key;
+  expect(
+    (
+      await request('account/password', 'POST', {
+        current: 'wrong-password',
+        next: 'new-long-password',
+      })
+    ).status
+  ).toBe(401);
+  expect(
+    (
+      await request('account/password', 'POST', {
+        current: 'long-test-password',
+        next: 'short',
+      })
+    ).status
+  ).toBe(400);
+  expect(
+    (
+      await request('account/password', 'POST', {
+        current: 'long-test-password',
+        next: 'new-long-password',
+        extra: 1,
+      })
+    ).status
+  ).toBe(400);
+  expect(
+    await request('account/password', 'POST', {
+      current: 'long-test-password',
+      next: 'new-long-password',
+    })
+  ).toEqual({ status: 200, body: { ok: true } });
+  expect((await request('todos')).status).toBe(200);
+  expect((await request('todos', 'GET', undefined, other)).status).toBe(401);
+  expect((await request('todos', 'GET', undefined, key)).status).toBe(200);
+  expect(
+    (
+      await request(
+        'auth/login',
+        'POST',
+        { username: 'owner', password: 'long-test-password' },
+        ''
+      )
+    ).status
+  ).toBe(401);
+  expect(
+    (
+      await request(
+        'auth/login',
+        'POST',
+        { username: 'owner', password: 'new-long-password' },
+        ''
+      )
+    ).status
+  ).toBe(200);
+});
+
+test('deleting the account removes every row of the user', async () => {
+  const { id: uid } = app.db
+    .query("SELECT id FROM users WHERE username='owner'")
+    .get() as { id: string };
+  await request('notes', 'POST', { title: 'First' });
+  const note = (await request('notes')).body[0];
+  await request(`notes/${note.id}`, 'PATCH', { title: 'Second' });
+  await request('prefs', 'PATCH', { brief_enabled: true });
+  await request('keys', 'POST', { name: 'assistant', scope: 'write' });
+  app.db
+    .query(
+      'INSERT INTO booking_links(slug,user_id,data,created_at) VALUES(?,?,?,?)'
+    )
+    .run('owner-link', uid, '{}', new Date().toISOString());
+  const count = (table: string) =>
+    (
+      app.db
+        .query(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id=?`)
+        .get(uid) as { n: number }
+    ).n;
+  const tables = ['records', 'history', 'prefs', 'booking_links', 'tokens'];
+  for (const table of tables) expect(count(table)).toBeGreaterThan(0);
+  expect(
+    (await request('account', 'DELETE', { password: 'wrong-password' }))
+      .status
+  ).toBe(401);
+  expect(
+    await request('account', 'DELETE', { password: 'long-test-password' })
+  ).toEqual({ status: 200, body: { ok: true } });
+  for (const table of tables) expect(count(table)).toBe(0);
+  expect(
+    app.db.query('SELECT COUNT(*) AS n FROM users WHERE id=?').get(uid)
+  ).toEqual({ n: 0 });
+  expect((await request('todos')).status).toBe(401);
+});
+
+test('account routes are for device sessions only', async () => {
+  for (const scope of ['read', 'write', 'add', 'book', 'feed']) {
+    const key = (await request('keys', 'POST', { name: scope, scope })).body
+      .key;
+    expect(
+      (
+        await request(
+          'account/password',
+          'POST',
+          { current: 'long-test-password', next: 'new-long-password' },
+          key
+        )
+      ).status
+    ).toBe(403);
+    expect(
+      (
+        await request(
+          'account',
+          'DELETE',
+          { password: 'long-test-password' },
+          key
+        )
+      ).status
+    ).toBe(403);
+  }
+  expect((await request('todos')).status).toBe(200);
+});

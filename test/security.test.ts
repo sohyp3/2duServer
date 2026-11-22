@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { createApp } from '../src/app';
 import { loadConfig } from '../src/config';
-import { RateLimiter, readObject } from '../src/security';
+import { clientAddress, RateLimiter, readObject } from '../src/security';
 import { validateChange } from '../src/records';
 
 let app: ReturnType<typeof createApp>;
@@ -49,6 +49,10 @@ test('secure configuration defaults and invalid configuration rejection', () => 
     { PORT: 'NaN' },
     { PORT: '0' },
     { ALLOW_REGISTRATION: 'yes' },
+    { TRUST_PROXY: 'yes' },
+    { MAX_USERS: '0' },
+    { MAX_USERS: '1.5' },
+    { MAX_USERS: 'many' },
     { ALLOWED_ORIGINS: '*' },
     { ALLOWED_ORIGINS: 'https://example.com/path' },
   ])
@@ -293,6 +297,70 @@ test('authentication throttles usernames across source IPs and does not trust fo
     );
     expect(spoofed.status).toBe(n < 30 ? 400 : 429);
   }
+});
+
+test('trusted proxy mode reads X-Real-IP only from loopback', () => {
+  const req = (ip?: string) =>
+    new Request('http://localhost/', {
+      headers: ip === undefined ? {} : { 'X-Real-IP': ip },
+    });
+  const cfg = loadConfig({ TRUST_PROXY: 'true', MAX_USERS: '50' });
+  expect(cfg.trustProxy).toBe(true);
+  expect(cfg.maxUsers).toBe(50);
+  expect(loadConfig({}).trustProxy).toBe(false);
+  expect(loadConfig({ MAX_USERS: '' }).maxUsers).toBe(null);
+  for (const loopback of ['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+    expect(clientAddress(req(' 203.0.113.7 '), loopback, true)).toBe(
+      '203.0.113.7'
+    );
+  expect(clientAddress(req('2001:db8::1'), '::1', true)).toBe('2001:db8::1');
+  expect(clientAddress(req('203.0.113.7'), '127.0.0.1', false)).toBe(
+    '127.0.0.1'
+  );
+  expect(clientAddress(req('203.0.113.7'), '198.51.100.2', true)).toBe(
+    '198.51.100.2'
+  );
+  for (const bad of ['not an ip', '1.2.3.4, 5.6.7.8', '<script>', ''])
+    expect(clientAddress(req(bad), '127.0.0.1', true)).toBe('127.0.0.1');
+  expect(clientAddress(req(), '127.0.0.1', true)).toBe('127.0.0.1');
+});
+
+test('sign-ups are limited per network and by MAX_USERS', async () => {
+  for (let n = 0; n < 6; n++) {
+    const response = await request(
+      '/v1/auth/register',
+      'POST',
+      { username: `user${n}`, password: 'long-test-password' },
+      '',
+      'signup-ip'
+    );
+    expect(response.status).toBe(n < 5 ? 200 : 429);
+    if (n === 5)
+      expect((await response.json()).error).toBe(
+        'Too many sign-ups from this network. Try again later.'
+      );
+  }
+  const duplicate = await request(
+    '/v1/auth/register',
+    'POST',
+    { username: 'owner', password: 'long-test-password' },
+    '',
+    'other-ip'
+  );
+  expect(duplicate.status).toBe(409);
+  app.db.close();
+  app = createApp(':memory:', { allowRegistration: true, maxUsers: 1 });
+  const register = (username: string) =>
+    request(
+      '/v1/auth/register',
+      'POST',
+      { username, password: 'long-test-password' },
+      ''
+    );
+  expect((await register('first')).status).toBe(200);
+  const full = await register('second');
+  expect(full.status).toBe(403);
+  expect((await full.json()).error).toBe('This server is full');
 });
 
 test('rate limiter fails closed at capacity and enforces its window', () => {

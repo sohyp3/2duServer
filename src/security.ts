@@ -7,7 +7,7 @@ export class HttpError extends Error {
   }
 }
 
-// Fixed windows, bounded memory, no client-controlled forwarded headers.
+// Fixed windows, bounded memory. Keys come from clientAddress, not raw headers.
 export class RateLimiter {
   private entries = new Map<string, { count: number; until: number }>();
   constructor(private capacity = 10_000) {}
@@ -29,6 +29,18 @@ export class RateLimiter {
     }
     return ++entry.count <= limit;
   }
+}
+
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+/** The client IP. Trusts X-Real-IP only from a loopback proxy when enabled. */
+export function clientAddress(
+  request: Request,
+  socketIP: string,
+  trustProxy: boolean
+): string {
+  if (!trustProxy || !LOOPBACK.has(socketIP)) return socketIP;
+  const real = request.headers.get('x-real-ip')?.trim() ?? '';
+  return /^[0-9a-fA-F:.]{2,45}$/.test(real) ? real : socketIP;
 }
 
 export const MAX_BODY = 5_000_000;
