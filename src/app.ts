@@ -51,7 +51,7 @@ export function createApp(
     PRAGMA busy_timeout=5000;
     PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write','book')), expires INTEGER, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write','book','add','feed')), expires INTEGER, created_at TEXT NOT NULL, last_used TEXT, meta TEXT);
     CREATE TABLE IF NOT EXISTS records(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(user_id,entity,id));
     CREATE TABLE IF NOT EXISTS history(user_id TEXT NOT NULL REFERENCES users(id), entity TEXT NOT NULL, id TEXT NOT NULL, data TEXT, updated_at TEXT NOT NULL, archived_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS prefs(user_id TEXT NOT NULL REFERENCES users(id), key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(user_id,key));
@@ -61,17 +61,18 @@ export function createApp(
     CREATE INDEX IF NOT EXISTS history_user ON history(user_id,archived_at);
     CREATE INDEX IF NOT EXISTS history_record ON history(user_id,entity,id,updated_at);
   `);
-  // Older databases have a tokens CHECK without the 'book' scope; SQLite can't
-  // alter a CHECK, so rebuild the table. Nothing references tokens.
+  // Older databases have a tokens CHECK without the 'add'/'feed' scopes (and no
+  // last_used/meta columns); SQLite can't alter a CHECK, so rebuild the table.
+  // Nothing references tokens.
   db.transaction(() => {
     const t = db
       .query(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='tokens'"
       )
       .get() as { sql: string } | null;
-    if (t && !t.sql.includes("'book'"))
-      db.exec(`CREATE TABLE tokens_new(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write','book')), expires INTEGER, created_at TEXT NOT NULL);
-        INSERT INTO tokens_new SELECT hash,user_id,name,scope,expires,created_at FROM tokens;
+    if (t && !t.sql.includes("'feed'"))
+      db.exec(`CREATE TABLE tokens_new(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write','book','add','feed')), expires INTEGER, created_at TEXT NOT NULL, last_used TEXT, meta TEXT);
+        INSERT INTO tokens_new(hash,user_id,name,scope,expires,created_at) SELECT hash,user_id,name,scope,expires,created_at FROM tokens;
         DROP TABLE tokens;
         ALTER TABLE tokens_new RENAME TO tokens;
         CREATE INDEX IF NOT EXISTS tokens_user ON tokens(user_id,scope);`);
@@ -245,7 +246,9 @@ export function createApp(
           if (count.n >= 100)
             return send({ error: 'Device session limit reached' }, 409);
           const token = secret();
-          db.query('INSERT INTO tokens VALUES(?,?,?,?,?,?)').run(
+          db.query(
+            'INSERT INTO tokens(hash,user_id,name,scope,expires,created_at) VALUES(?,?,?,?,?,?)'
+          ).run(
             hash(token),
             user.id,
             'Device session',
@@ -411,6 +414,16 @@ export function createApp(
           Date.now() + SESSION_MS,
           hash(bearer)
         );
+      // Record last use for keys, at most once an hour.
+      if (
+        token.scope !== 'session' &&
+        (!token.last_used ||
+          Date.now() - Date.parse(token.last_used) > 3_600_000)
+      )
+        db.query('UPDATE tokens SET last_used=? WHERE hash=?').run(
+          new Date().toISOString(),
+          hash(bearer)
+        );
       const uid = token.user_id;
       // A booking key sees free times on its owner's links and books them. Nothing else.
       if (token.scope === 'book' && parts[1] !== 'agent')
@@ -418,6 +431,24 @@ export function createApp(
           { error: 'This key can only see free times and make bookings' },
           403
         );
+      // A feed key only works as a calendar feed link.
+      if (token.scope === 'feed')
+        return send(
+          { error: 'This key only works as a calendar feed link' },
+          403
+        );
+      // An add key creates tasks and notes, and lists calendars and goals.
+      if (
+        token.scope === 'add' &&
+        !(
+          parts.length === 2 &&
+          ((req.method === 'POST' &&
+            (parts[1] === 'todos' || parts[1] === 'notes')) ||
+            (req.method === 'GET' &&
+              (parts[1] === 'calendars' || parts[1] === 'goals')))
+        )
+      )
+        return send({ error: 'This key can only add tasks and notes' }, 403);
       if (req.method !== 'GET' && token.scope === 'read')
         return send({ error: 'This key is read-only' }, 403);
       if (!requests.allow(`user:${uid}`, 300, 60000)) {
@@ -437,23 +468,56 @@ export function createApp(
           return send(
             db
               .query(
-                "SELECT hash as id,name,scope,created_at FROM tokens WHERE user_id=? AND scope!='session'"
+                "SELECT hash as id,name,scope,created_at,expires,last_used,meta FROM tokens WHERE user_id=? AND scope!='session'"
               )
               .all(uid)
+              .map((r: any) => ({ ...r, meta: r.meta && JSON.parse(r.meta) }))
           );
         if (req.method === 'POST' && !parts[2]) {
           const b = await body();
-          exactFields(b, ['name', 'scope']);
+          exactFields(b, ['name', 'scope', 'expires_days', 'calendar_ids']);
           if (
             typeof b.name !== 'string' ||
             !b.name.trim() ||
             b.name.length > 100 ||
-            !['read', 'write', 'book'].includes(b.scope as string)
+            !['read', 'write', 'book', 'add', 'feed'].includes(
+              b.scope as string
+            )
           )
             return send(
-              { error: 'Provide a key name and read, write or book scope' },
+              {
+                error:
+                  'Provide a key name and read, write, book, add or feed scope',
+              },
               400
             );
+          const days = b.expires_days;
+          if (days != null && ![30, 90, 365].includes(days as number))
+            return send(
+              { error: 'expires_days must be 30, 90, 365 or null' },
+              400
+            );
+          const ids = b.calendar_ids;
+          if (
+            ids !== undefined &&
+            (b.scope !== 'feed' ||
+              !Array.isArray(ids) ||
+              ids.length < 1 ||
+              ids.length > 50 ||
+              !ids.every(
+                (c) => typeof c === 'string' && /^[\w-]{1,128}$/.test(c)
+              ))
+          )
+            return send(
+              {
+                error:
+                  'calendar_ids must be 1 to 50 calendar ids on a feed key',
+              },
+              400
+            );
+          const expires =
+            days == null ? null : Date.now() + (days as number) * 86400000;
+          const meta = ids === undefined ? null : { calendar_ids: ids };
           const count = db
             .query(
               "SELECT COUNT(*) AS n FROM tokens WHERE user_id=? AND scope!='session'"
@@ -462,16 +526,19 @@ export function createApp(
           if (count.n >= 50)
             return send({ error: 'API key limit reached' }, 409);
           const key = secret();
-          db.query('INSERT INTO tokens VALUES(?,?,?,?,?,?)').run(
+          db.query(
+            'INSERT INTO tokens(hash,user_id,name,scope,expires,created_at,meta) VALUES(?,?,?,?,?,?,?)'
+          ).run(
             hash(key),
             uid,
             b.name,
             b.scope,
-            null,
-            new Date().toISOString()
+            expires,
+            new Date().toISOString(),
+            meta && JSON.stringify(meta)
           );
           return send(
-            { key, id: hash(key), name: b.name, scope: b.scope },
+            { key, id: hash(key), name: b.name, scope: b.scope, expires, meta },
             201
           );
         }
@@ -735,6 +802,8 @@ export function createApp(
           )
         );
       }
+      if (parts[1] === 'history' && token.scope !== 'session')
+        return send({ error: 'Sign in to see history' }, 403);
       if (parts[1] === 'history' && req.method === 'GET')
         return send(
           db
@@ -748,6 +817,12 @@ export function createApp(
         return send({ error: 'Not found' }, 404);
       const entity = parts[1] as Entity,
         id = parts[2];
+      if (
+        entity === 'briefs' &&
+        req.method !== 'GET' &&
+        token.scope !== 'session'
+      )
+        return send({ error: 'Only the app can change briefs' }, 403);
       if (req.method === 'GET') {
         if (id) {
           const old = store.get(uid, entity, id);

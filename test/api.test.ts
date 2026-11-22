@@ -339,3 +339,108 @@ test('briefs sync and validation', async () => {
   expect((await request('sync', 'POST', { changes: [rec('2026-11-10', '2026-11-11')] })).status).toBe(400);
   expect((await request('sync', 'POST', { changes: [rec('2026-11-12', '2026-11-12', 'x'.repeat(20001))] })).status).toBe(400);
 });
+
+const newKey = async (body: Record<string, unknown>) =>
+  (await request('keys', 'POST', { name: 'agent', ...body })).body;
+
+test('add keys only create tasks and notes and list calendars and goals', async () => {
+  const { key } = await newKey({ scope: 'add' });
+  const todo = await request('todos', 'POST', { name: 'Buy milk' }, key);
+  expect(todo.status).toBe(201);
+  const id = todo.body.id;
+  expect((await request('todos', 'GET', undefined, key)).status).toBe(403);
+  expect((await request(`todos/${id}`, 'GET', undefined, key)).status).toBe(
+    403
+  );
+  expect(
+    (await request(`todos/${id}`, 'PATCH', { name: 'x' }, key)).status
+  ).toBe(403);
+  expect((await request(`todos/${id}`, 'DELETE', undefined, key)).body).toEqual(
+    { error: 'This key can only add tasks and notes' }
+  );
+  expect((await request('calendars', 'GET', undefined, key)).status).toBe(200);
+  expect((await request('goals', 'GET', undefined, key)).status).toBe(200);
+  expect((await request('sync', 'POST', { changes: [] }, key)).status).toBe(
+    403
+  );
+  expect((await request('notes', 'GET', undefined, key)).status).toBe(403);
+  expect(
+    (await request('notes', 'POST', { title: 'idea', content: 'x' }, key))
+      .status
+  ).toBe(201);
+});
+
+test('feed keys are rejected by the API', async () => {
+  const { key } = await newKey({ scope: 'feed' });
+  const res = await request('todos', 'GET', undefined, key);
+  expect(res.status).toBe(403);
+  expect(res.body).toEqual({
+    error: 'This key only works as a calendar feed link',
+  });
+});
+
+test('write keys cannot read history or change briefs', async () => {
+  const { key } = await newKey({ scope: 'write' });
+  expect((await request('history', 'GET', undefined, key)).status).toBe(403);
+  expect(
+    (
+      await request(
+        'briefs',
+        'POST',
+        { id: '2026-01-01', date: '2026-01-01' },
+        key
+      )
+    ).status
+  ).toBe(403);
+  expect(
+    (await request('todos', 'POST', { name: 'still works' }, key)).status
+  ).toBe(201);
+  expect((await request('history')).status).toBe(200);
+});
+
+test('keys take an optional expiry and expired keys are rejected', async () => {
+  const before = Date.now();
+  const key = await newKey({ scope: 'read', expires_days: 30 });
+  expect(key.expires).toBeGreaterThanOrEqual(before + 30 * 86400000);
+  expect(key.expires).toBeLessThanOrEqual(Date.now() + 30 * 86400000);
+  expect(key.meta).toBeNull();
+  expect((await newKey({ scope: 'read', expires_days: 7 })).error).toBeString();
+  expect((await request('todos', 'GET', undefined, key.key)).status).toBe(200);
+  app.db.query('UPDATE tokens SET expires=1 WHERE hash=?').run(key.id);
+  expect((await request('todos', 'GET', undefined, key.key)).status).toBe(401);
+});
+
+test('calendar_ids only on feed keys, stored in meta', async () => {
+  const bad = await request('keys', 'POST', {
+    name: 'r',
+    scope: 'read',
+    calendar_ids: ['abc'],
+  });
+  expect(bad.status).toBe(400);
+  expect(
+    (
+      await request('keys', 'POST', {
+        name: 'f',
+        scope: 'feed',
+        calendar_ids: ['bad id!'],
+      })
+    ).status
+  ).toBe(400);
+  const feed = await newKey({ scope: 'feed', calendar_ids: ['work-1'] });
+  expect(feed.meta).toEqual({ calendar_ids: ['work-1'] });
+  const listed = (await request('keys')).body.find(
+    (k: any) => k.id === feed.id
+  );
+  expect(listed.meta).toEqual({ calendar_ids: ['work-1'] });
+  expect(listed.expires).toBeNull();
+});
+
+test('last_used is set after the first request with a key', async () => {
+  const key = await newKey({ scope: 'read' });
+  const find = async () =>
+    (await request('keys')).body.find((k: any) => k.id === key.id);
+  expect((await find()).last_used).toBeNull();
+  await request('todos', 'GET', undefined, key.key);
+  const used = (await find()).last_used;
+  expect(Date.parse(used)).toBeGreaterThan(Date.now() - 60000);
+});

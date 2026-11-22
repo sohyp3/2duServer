@@ -168,3 +168,45 @@ test('databases created before revisions gain rev=1 rows and a cursor', async ()
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('an old tokens table without add/feed scopes migrates', async () => {
+  const directory = mkdtempSync(join(tmpdir(), '2du-server-'));
+  const path = join(directory, 'old.sqlite');
+  try {
+    const old = new Database(path);
+    old.exec(`CREATE TABLE users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL);
+      CREATE TABLE tokens(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, scope TEXT NOT NULL CHECK(scope IN ('session','read','write','book')), expires INTEGER, created_at TEXT NOT NULL);`);
+    old.close();
+    const app = createApp(path, { allowRegistration: true });
+    try {
+      const call = async (route: string, body: unknown, token = '') =>
+        app.fetch(
+          new Request(`http://localhost/v1/${route}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify(body),
+          })
+        );
+      const { token } = await (
+        await call('auth/register', {
+          username: 'owner',
+          password: 'long-test-password',
+        })
+      ).json();
+      const res = await call('keys', { name: 'adder', scope: 'add' }, token);
+      expect(res.status).toBe(201);
+      const columns = (
+        app.db.query('PRAGMA table_info(tokens)').all() as { name: string }[]
+      ).map((c) => c.name);
+      expect(columns).toContain('last_used');
+      expect(columns).toContain('meta');
+    } finally {
+      app.db.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

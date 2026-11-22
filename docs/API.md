@@ -66,7 +66,24 @@ Suggested agent instruction: “Use my 2du API to manage my tasks, calendars, an
 
 ## Device-only endpoints
 
-`POST /v1/auth/register` (only when registration enabled) and `/v1/auth/login` accept `{username,password}` and return `{token,username}`. Session tokens can manage `/v1/keys` (GET list, POST `{name,scope}` where scope is `read`/`write`/`book`, DELETE `/v1/keys/{id}`). `DELETE /v1/session` revokes the current session. Device sessions last 90 days from last use; an authenticated request extends them, at most once a day. `POST /v1/sync` takes `{changes:[{entity,id,data,updated_at}]}` and returns `{records:[...],cursor}` including tombstones (`data:null`). `cursor` is the account's latest revision number. Send `since` (a non-negative integer, the last `cursor` you received) to get only what changed: `records` then holds the records revised after `since`, plus the server copy of every record you submitted in `changes`, so a stale edit still gets its queued change cleared. Without `since` the whole account is returned. Invalid `since` values get 400 `Invalid sync cursor`. Revision numbers are not part of record responses. Agents use CRUD endpoints rather than device sync.
+`POST /v1/auth/register` (only when registration enabled) and `/v1/auth/login` accept `{username,password}` and return `{token,username}`. Session tokens can manage `/v1/keys` (see [Key scopes](#key-scopes)). `DELETE /v1/session` revokes the current session. Device sessions last 90 days from last use; an authenticated request extends them, at most once a day. `POST /v1/sync` takes `{changes:[{entity,id,data,updated_at}]}` and returns `{records:[...],cursor}` including tombstones (`data:null`). `cursor` is the account's latest revision number. Send `since` (a non-negative integer, the last `cursor` you received) to get only what changed: `records` then holds the records revised after `since`, plus the server copy of every record you submitted in `changes`, so a stale edit still gets its queued change cleared. Without `since` the whole account is returned. Invalid `since` values get 400 `Invalid sync cursor`. Revision numbers are not part of record responses. Agents use CRUD endpoints rather than device sync.
+
+## Key scopes
+
+| Scope | Can do |
+|---|---|
+| `session` | A device sign-in. Everything, including sync, keys, history, prefs, booking links and brief records. Expires 90 days after last use. |
+| `read` | GET on records and `/v1/pick`. No history. |
+| `write` | Record CRUD and `POST /v1/brief`. Not `/v1/history` and not POST/PATCH/DELETE on `/v1/briefs`. |
+| `book` | Only `/v1/agent/*` (see Agent booking). |
+| `add` | Only `POST /v1/todos`, `POST /v1/notes`, `GET /v1/calendars` and `GET /v1/goals` (lists, no ids). 403 `This key can only add tasks and notes` otherwise. |
+| `feed` | A calendar feed link. Every `/v1` route returns 403 `This key only works as a calendar feed link`. |
+
+Keys are managed with a session token:
+
+- `POST /v1/keys` takes `{name, scope, expires_days?, calendar_ids?}`. `scope` is `read`, `write`, `book`, `add` or `feed`. `expires_days` is `30`, `90`, `365` or `null`/absent (never expires). `calendar_ids` (array of 1-50 ids, each `[A-Za-z0-9_-]{1,128}`) is allowed only with `feed`. Returns 201 `{key, id, name, scope, expires, meta}`; `key` is shown once, `expires` is epoch milliseconds or null, `meta` is `{calendar_ids}` or null. An expired key gets 401.
+- `GET /v1/keys` lists non-session keys: `[{id, name, scope, created_at, expires, last_used, meta}]`. `last_used` is a UTC ISO time updated at most once an hour, or null if never used.
+- `DELETE /v1/keys/{id}` revokes a key.
 
 ## Standalone server limits
 

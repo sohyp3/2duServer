@@ -178,7 +178,11 @@ test('migrates an old tokens table to allow book scope', () => {
     INSERT INTO tokens VALUES('h','u','k','write',NULL,'now');`);
   old.close();
   const a = createApp(path);
-  a.db.query("INSERT INTO tokens VALUES('h2','u','b','book',NULL,'now')").run();
+  a.db
+    .query(
+      "INSERT INTO tokens(hash,user_id,name,scope,expires,created_at) VALUES('h2','u','b','book',NULL,'now')"
+    )
+    .run();
   expect((a.db.query('SELECT COUNT(*) AS n FROM tokens').get() as any).n).toBe(
     2
   );
