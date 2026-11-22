@@ -39,7 +39,7 @@ Goal fields: `name` (required, up to 200), `description` (nullable), `importance
 
 Goal category fields: `name` (required, up to 60), `color` (`#rrggbb`, default `#6c4dff`). Sync entity name: `goal_categories`.
 
-`GET /v1/pick` (any scope) returns `{ "choice": Candidate | null, "alternatives": Candidate[] }`. Optional query parameters: `minutes` (integer 1-1440; skips tasks needing longer) and `week_start` (canonical UTC ISO start of the user's week; default the most recent Monday 00:00 UTC). A candidate is `{ kind: "todo" | "goal", id, name, goal_id, weight, reasons[] }`. The choice is a weighted random draw, so low-importance goals still surface occasionally; `alternatives` are the three heaviest other candidates.
+`GET /v1/pick` (`session`, `read` and `write` keys; `add`, `book` and `feed` keys get 403) returns `{ "choice": Candidate | null, "alternatives": Candidate[] }`. Optional query parameters: `minutes` (integer 1-1440; skips tasks needing longer) and `week_start` (canonical UTC ISO start of the user's week; default the most recent Monday 00:00 UTC). A candidate is `{ kind: "todo" | "goal", id, name, goal_id, weight, reasons[] }`. The choice is a weighted random draw, so low-importance goals still surface occasionally; `alternatives` are the three heaviest other candidates.
 
 Note fields: `title` (required), `content` (Markdown string, default empty), `pinned` (boolean).
 

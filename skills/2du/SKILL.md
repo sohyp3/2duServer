@@ -27,7 +27,7 @@ Build bodies with `jq` when the text holds quotes or newlines, and pipe them in 
 jq -n --arg t "$title" --arg c "$markdown" '{title:$t,content:$c}' | $2du POST /v1/notes -
 ```
 
-The client reads the key from `TWODU_KEY`, then `~/.config/2du/key`. `TWODU_URL` overrides the default server, `https://2du.hyp3.cafe`. If no key is set, ask the user to create one in the app under **Settings → A key for your agent**, and to set it themselves rather than paste it into the chat. Keep the key out of everything you print or write: it has full access to the account's records.
+The client reads the key from `TWODU_KEY`, then `~/.config/2du/key`. `TWODU_URL` overrides the default server, `https://2du.hyp3.cafe`. If no key is set, ask the user to create one in the app under **Settings → A key for your agent**, and to set it themselves rather than paste it into the chat. Keep the key out of everything you print or write: it has full access to the account's records. An `add` key can only create tasks and notes and list calendars and goals; anything else, including reading or editing tasks and notes, gets 403 `This key can only add tasks and notes`.
 
 ## Routes
 
@@ -104,7 +104,7 @@ Device edits only reach the server on the next sync, so a recent offline change 
 |---|---|---|
 | 400 | Bad field or value | Check the field list and timestamp format, then retry |
 | 401 | Key is wrong or revoked (the message says `Sign in again to sync`, which doesn't apply to agents) | Ask the user for a new key |
-| 403 | Read-only key, or a device-only route | Tell the user the key is read-only; only they can issue a read & write key |
+| 403 | Read-only or add-only key, or a device-only route | Tell the user what the key can't do; only they can issue a read & write key |
 | 404 | No such record, or it was deleted | Search again, or check `/v1/history` |
 | 409 | Calendar still has tasks, or the account hit a limit | For a calendar, move its tasks first, then delete |
 | 413 / 415 | Body over 500 KB, or wrong content type | Shorten the body. The client sets the content type |

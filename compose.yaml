@@ -9,7 +9,9 @@ services:
       HOST: 0.0.0.0
       PORT: 3000
       DATABASE_PATH: /app/data/2du.sqlite
-      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+      MAX_USERS: ${MAX_USERS:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
     volumes:
       - data:/app/data

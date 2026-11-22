@@ -9,13 +9,9 @@ cp .env.example .env
 bun start
 ```
 
-Health: `http://127.0.0.1:3000/health`. Registration is disabled initially. For initial account creation:
+Health: `http://127.0.0.1:3000/health`. The server is open sign-up by default (`ALLOW_REGISTRATION=true`): anyone who can reach it can create an account. In **2du → Settings → Sync**, use `http://localhost:3000` on the same computer, enter a username and password of at least 10 characters, and choose **Create an account**. Other devices sign in to that account.
 
-```sh
-ALLOW_REGISTRATION=true bun start
-```
-
-In **2du → Settings → Sync**, use `http://localhost:3000` on the same computer, enter a username and password of at least 10 characters, and choose **Create an account**. Stop the server afterward and restart with `ALLOW_REGISTRATION=false`. Other devices sign in to that account. No frontend code changes are needed. A phone's localhost refers to the phone; use your HTTPS domain for devices.
+To close sign-up, set `ALLOW_REGISTRATION=false` and restart; existing accounts keep working. `MAX_USERS` (a positive integer, empty for no limit) caps the number of accounts; once reached, sign-up gets 403 `This server is full`. Sign-up is also limited to 5 per client IP per hour. Set `TRUST_PROXY=true` only when a reverse proxy on the same host (such as the bundled Nginx config) sets `X-Real-IP`; the server then uses that header for rate limits, and reads it only from loopback connections. No frontend code changes are needed. A phone's localhost refers to the phone; use your HTTPS domain for devices.
 
 The folder is an independent Git repository. It does not import files or dependencies from the app. The original app repository is untouched.
 
@@ -55,7 +51,7 @@ No Nginx reload is needed. Web data lives in each browser's local database until
 
 To update: `git pull && docker compose up -d --build`. Do not re-copy the Nginx file after certbot has edited it; that would remove the HTTPS block.
 
-Application throttles use the actual socket IP and deliberately ignore forwarded headers. Behind Nginx, clients still share the application's proxy-IP limits; the Nginx limits add per-client protection. These assume clients connect directly to Nginx. Set up trusted real-IP handling separately if a CDN or another proxy sits in front.
+Application throttles use the socket IP unless `TRUST_PROXY=true`, in which case they use the `X-Real-IP` header from loopback connections. Compose sets `TRUST_PROXY=true` by default, since its port is published only on loopback for the host's Nginx, which sets `X-Real-IP`. The Nginx limits add per-client protection. These assume clients connect directly to Nginx. Set up trusted real-IP handling separately if a CDN or another proxy sits in front.
 
 Run with Docker:
 
@@ -66,7 +62,7 @@ docker compose up -d --build
 curl http://127.0.0.1:3000/health
 ```
 
-The image runs as an unprivileged user; Compose uses a read-only filesystem, persistent volumes, dropped capabilities, resource limits, and a loopback-only published port. To register the first account, temporarily set `ALLOW_REGISTRATION=true` in `.env`, run `docker compose up -d --force-recreate`, create the account, then set false and recreate again. `docker compose down` preserves volumes; `down -v` deletes them.
+The image runs as an unprivileged user; Compose uses a read-only filesystem, persistent volumes, dropped capabilities, resource limits, and a loopback-only published port. Compose defaults to open sign-up; to close it, set `ALLOW_REGISTRATION=false` in `.env` and run `docker compose up -d --force-recreate`. `docker compose down` preserves volumes; `down -v` deletes them.
 
 For a Linux service, [deploy/2du-server.service](deploy/2du-server.service) is a hardened systemd template. Install the code at `/opt/2duServer`, install Bun at `/usr/local/bin/bun`, create the `twodu` service user, and create `/etc/2du-server.env` from `.env.example` with mode `0600`. In that file use `DATABASE_PATH=/var/lib/2du-server/2du.sqlite`. The service creates its private state directory. Use either systemd or Docker for the API, with your existing Nginx on the host.
 
@@ -79,11 +75,32 @@ sudo systemctl enable --now 2du-server
 curl http://127.0.0.1:3000/health
 ```
 
-Temporarily set `ALLOW_REGISTRATION=true` in `/etc/2du-server.env` and restart the service to create your account through the app using `https://YOUR_DOMAIN`. Then set it back to `false` and restart again. For Docker, use the `.env` registration steps above. Check the public endpoint with `curl https://YOUR_DOMAIN/health`, then use that HTTPS address in the app's Sync settings.
+Create your account through the app using `https://YOUR_DOMAIN`. To close sign-up, set `ALLOW_REGISTRATION=false` in `/etc/2du-server.env` and restart the service; behind Nginx on the same host also set `TRUST_PROXY=true`. Check the public endpoint with `curl https://YOUR_DOMAIN/health`, then use that HTTPS address in the app's Sync settings.
 
 ## Data and API
 
-[API reference](docs/API.md) describes the app-compatible `/v1` endpoints. Sessions expire after 30 days. Agents use read-only or read/write keys created in the app; only sessions can sync or manage keys. Logout revokes that session. Agent keys last until revoked.
+[API reference](docs/API.md) describes the app-compatible `/v1` endpoints. Device sessions expire 90 days after last use. Agents use keys created in the app; only sessions can sync or manage keys. Logout revokes that session. Agent keys last until revoked or until their optional expiry (30, 90 or 365 days).
+
+### Key types
+
+| Scope | Can do |
+|---|---|
+| `session` | A device sign-in: everything, including sync, keys, history and account settings. |
+| `read` | Read records. No history. |
+| `write` | Create, edit and delete records. No history, no brief record edits. |
+| `add` | Only create tasks and notes, and list calendars and goals. |
+| `book` | Only the agent booking routes (`/v1/agent/*`). |
+| `feed` | Only the calendar feed link below; every `/v1` route gets 403. |
+
+See [Key scopes](docs/API.md#key-scopes) for the exact routes.
+
+### Calendar feed
+
+A `feed` key gives a read-only ICS link of the account's tasks, going one way from 2du to the calendar app. Subscribe to `webcal://2du.hyp3.cafe/feed/<key>.ics` in Apple or Outlook Calendar, or add `https://2du.hyp3.cafe/feed/<key>.ics` in Google Calendar with "From URL". The URL contains the key, so treat it like a password; revoke the key to stop the feed. Nginx proxies `/feed/` with access logging off.
+
+### Change password and delete account
+
+From a signed-in device, `POST /v1/account/password` changes the password and signs out every other device session; API keys keep working. `DELETE /v1/account` with the password permanently deletes the account and all its data, sessions and keys. Both need a device session and are throttled like sign-in.
 
 Sync merges complete records by UTC `updated_at`. Equal-time conflicts use sorted field serialization; deletion wins an equal-time tie. Newer writes can restore deleted records. CRUD timestamps advance past the previous stored version. Tombstones remain indefinitely. Repeated losing versions are deduplicated; the newest 2,000 conflict versions per account are retained and the history endpoint returns the newest 200. Restore a version through a normal PATCH with its editable fields. This is record-level merging, so concurrent edits can replace each other's fields. Keep device clocks correct.
 
@@ -105,7 +122,7 @@ To restore: stop the API; retain the existing database and WAL/SHM files as a ro
 
 Passwords use Argon2id (64 MiB, three passes); random 256-bit bearer tokens are stored only as SHA-256 hashes. SQL uses bound parameters. Requests enforce account ownership and key permissions. Authentication has per-user/per-socket throttles and at most four concurrent password operations. General request throttles, bounded limiter maps, streaming byte limits, storage quotas, generic internal errors, restrictive database permissions and response headers reduce common abuse paths.
 
-This service is for self-hosted personal use. Data is readable by the server; use encrypted disks/backups for protection at rest. TLS is provided by your proxy. Rate limits are per process and reset on restart. The service does not include account recovery, email verification, password changes, or a distributed abuse-control service. Keep registration closed, dependencies/runtime patched, and the database private.
+This service is a small shared server with open sign-up by default. Data is readable by the server; use encrypted disks/backups for protection at rest. TLS is provided by your proxy. Rate limits are per process and reset on restart. Users can change their password and permanently delete their account and all its data. The service does not include account recovery, email verification, or a distributed abuse-control service. On an open sign-up server, consider `MAX_USERS`, and keep dependencies/runtime patched and the database private.
 
 Implementation references: [Bun password hashing](https://bun.sh/guides/util/hash-a-password) and [OWASP REST security guidance](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html).
 
