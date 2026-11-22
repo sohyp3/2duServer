@@ -23,6 +23,8 @@ Content-Type: application/json
 | `/v1/calendars/{id}` | GET, PATCH, DELETE | Rename, recolor, delete an empty calendar |
 | `/v1/goals` | GET, POST | List/create goals |
 | `/v1/goals/{id}` | GET, PATCH, DELETE | Read, edit, or delete a goal. Deleting a goal leaves its tasks alone |
+| `/v1/goal_categories` | GET, POST | List/create named, coloured goal categories |
+| `/v1/goal_categories/{id}` | GET, PATCH, DELETE | Rename, recolour, or delete a category. Deleting a category leaves its goals alone |
 | `/v1/pick` | GET | Weighted random answer to "what should I do now?" |
 | `/v1/briefs` | GET | Daily briefs, one per local date (`id` = `date`; fields `date`, `content` up to 20,000 chars). Written by the server; clients normally only read them |
 | `/v1/history` | GET | Latest 200 overwritten versions for recovery |
@@ -33,7 +35,9 @@ All lists support `?q=text` and `?random=1`. Task lists additionally support `ca
 
 Task fields: `name` (required), `description` (nullable), `datetime` (canonical UTC ISO), `time_needed` (nonnegative integer minutes or null), `priority` (`urgent`, `moderate`, `low`), `status` (`pending`, `in_progress`, `completed`, `cancelled`), `calendar_id` (default `daily`), `goal_id` (nullable goal ID; a goal ID matching no goal is treated as no goal), `parent_id` (nullable task ID), `remind_me` (boolean; device-local scheduling limitation in ../README.md).
 
-Goal fields: `name` (required, up to 200), `description` (nullable), `importance` (integer 1-10, default 5), `weekly_target` (null or integer 1-100 completed tasks per week), `status` (`active`, `paused`, `done`).
+Goal fields: `name` (required, up to 200), `description` (nullable), `importance` (integer 1-10, default 5), `weekly_target` (null or integer 1-100 completed tasks per week), `status` (`active`, `paused`, `done`), `category_id` (nullable goal category ID; a category ID matching no category is treated as uncategorised; optional, so older goal records without it still sync).
+
+Goal category fields: `name` (required, up to 60), `color` (`#rrggbb`, default `#6c4dff`). Sync entity name: `goal_categories`.
 
 `GET /v1/pick` (any scope) returns `{ "choice": Candidate | null, "alternatives": Candidate[] }`. Optional query parameters: `minutes` (integer 1-1440; skips tasks needing longer) and `week_start` (canonical UTC ISO start of the user's week; default the most recent Monday 00:00 UTC). A candidate is `{ kind: "todo" | "goal", id, name, goal_id, weight, reasons[] }`. The choice is a weighted random draw, so low-importance goals still surface occasionally; `alternatives` are the three heaviest other candidates.
 

@@ -94,3 +94,22 @@ test('store refuses to delete a calendar that still has tasks', () => {
     'Move tasks out of this calendar before deleting it'
   );
 });
+
+test('store defaults goal categories and goal category_id', () => {
+  const { store } = app;
+  const cat = store.save(uid, 'goal_categories', null, { name: 'Health' }).data;
+  expect(cat.color).toBe('#6c4dff');
+  const cal = store.save(uid, 'calendars', null, { name: 'Home' }).data;
+  expect(cal.color).toBe('#a7c968');
+  const goal = store.save(uid, 'goals', null, { name: 'Run' }).data;
+  expect(goal.category_id).toBeNull();
+  const linked = store.save(uid, 'goals', goal.id as string, {
+    category_id: cat.id,
+  }).data;
+  expect(linked.category_id).toBe(cat.id);
+  store.remove(uid, 'goal_categories', cat.id as string);
+  expect(store.get(uid, 'goals', goal.id as string)?.category_id).toBe(cat.id);
+  expect(() =>
+    store.save(uid, 'goal_categories', null, { name: 'X', color: 'blue' })
+  ).toThrow('Invalid category color');
+});

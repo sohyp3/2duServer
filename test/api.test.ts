@@ -326,6 +326,57 @@ test('goals CRUD, validation, goal_id filter and sync', async () => {
   expect(sync).toMatchObject({ status: 200 });
 });
 
+test('goal categories CRUD, goal category_id, colour check and sync', async () => {
+  const c = await request('goal_categories', 'POST', { name: 'Health' });
+  expect(c.status).toBe(201);
+  expect(c.body).toMatchObject({ name: 'Health', color: '#6c4dff' });
+  const cid = c.body.id;
+  expect((await request(`goal_categories/${cid}`)).body.name).toBe('Health');
+  expect(
+    (await request(`goal_categories/${cid}`, 'PATCH', { color: '#112233' }))
+      .body.color
+  ).toBe('#112233');
+  expect(
+    (await request(`goal_categories/${cid}`, 'PATCH', { color: 'red' })).status
+  ).toBe(400);
+  expect(
+    (await request('goal_categories', 'POST', { name: 'x'.repeat(61) })).status
+  ).toBe(400);
+  expect((await request('goal_categories')).body).toHaveLength(1);
+  const g = await request('goals', 'POST', { name: 'Run', category_id: cid });
+  expect(g.status).toBe(201);
+  expect(g.body.category_id).toBe(cid);
+  expect(
+    (await request('goals', 'POST', { name: 'Bad', category_id: 'a b' }))
+      .status
+  ).toBe(400);
+  expect((await request('goals', 'POST', { name: 'None' })).body.category_id)
+    .toBeNull();
+  expect((await request(`goal_categories/${cid}`, 'DELETE')).status).toBe(200);
+  expect((await request(`goal_categories/${cid}`)).status).toBe(404);
+  expect((await request(`goals/${g.body.id}`)).body.category_id).toBe(cid);
+  const now = new Date().toISOString();
+  const sync = await request('sync', 'POST', {
+    changes: [
+      { entity: 'goal_categories', id: 'gc1', updated_at: now, data: { id: 'gc1', name: 'Work', color: '#abcdef', created_at: now, updated_at: now } },
+      { entity: 'goals', id: 'g1', updated_at: now, data: { id: 'g1', name: 'Ship', description: null, importance: 4, weekly_target: null, status: 'active', category_id: 'gc1', created_at: now, updated_at: now } },
+      { entity: 'goals', id: 'g2', updated_at: now, data: { id: 'g2', name: 'Old', description: null, importance: 4, weekly_target: null, status: 'active', created_at: now, updated_at: now } },
+    ],
+  });
+  expect(sync.status).toBe(200);
+  const pulled = await request('sync', 'POST', { changes: [] });
+  expect(pulled.status).toBe(200);
+  expect(JSON.stringify(pulled.body)).toContain('"gc1"');
+  expect((await request('goals/g1')).body.category_id).toBe('gc1');
+  expect((await request('goal_categories/gc1')).body.color).toBe('#abcdef');
+  const bad = await request('sync', 'POST', {
+    changes: [
+      { entity: 'goal_categories', id: 'gc2', updated_at: now, data: { id: 'gc2', name: 'Bad', color: '#12345', created_at: now, updated_at: now } },
+    ],
+  });
+  expect(bad.status).toBe(400);
+});
+
 test('briefs sync and validation', async () => {
   const now = new Date().toISOString();
   const rec = (id: string, date: string, content = 'hi') => ({

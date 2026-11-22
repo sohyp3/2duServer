@@ -1,6 +1,13 @@
 import { HttpError } from './security';
 
-export const entities = ['todos', 'notes', 'calendars', 'goals', 'briefs'] as const;
+export const entities = [
+  'todos',
+  'notes',
+  'calendars',
+  'goals',
+  'briefs',
+  'goal_categories',
+] as const;
 export type Entity = (typeof entities)[number];
 export interface Change {
   entity: Entity;
@@ -34,9 +41,11 @@ export const fields = {
     'importance',
     'weekly_target',
     'status',
+    'category_id',
     'created_at',
     'updated_at',
   ],
+  goal_categories: ['id', 'name', 'color', 'created_at', 'updated_at'],
 } satisfies Record<Entity, string[]>;
 
 export function validateChange(value: unknown): Change {
@@ -115,6 +124,11 @@ export function validateChange(value: unknown): Change {
         !['active', 'paused', 'done'].includes(d.status)
       )
         throw new HttpError(400, 'Invalid goal');
+      if (d.category_id != null) identifier(d.category_id);
+    } else if (c.entity === 'goal_categories') {
+      text(d.name, 60);
+      if (typeof d.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(d.color))
+        throw new HttpError(400, 'Invalid category color');
     } else if (c.entity === 'briefs') {
       if (
         typeof d.date !== 'string' ||

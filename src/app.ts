@@ -202,7 +202,7 @@ export function createApp(
         });
       }
       const validRoute =
-        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|booking(?:\/[a-z0-9-]{3,40})?|public\/booking\/[a-z0-9-]{3,40}|agent\/booking(?:\/[a-z0-9-]{3,40})?|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs)(?:\/[\w-]{1,128})?)$/.test(
+        /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|booking(?:\/[a-z0-9-]{3,40})?|public\/booking\/[a-z0-9-]{3,40}|agent\/booking(?:\/[a-z0-9-]{3,40})?|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs|goal_categories)(?:\/[\w-]{1,128})?)$/.test(
           url.pathname
         );
       if (!validRoute) return send({ error: 'Not found' }, 404);

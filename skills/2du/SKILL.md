@@ -39,6 +39,10 @@ The client reads the key from `TWODU_KEY`, then `~/.config/2du/key`. `TWODU_URL`
 | `/v1/notes/{id}` | GET, PATCH, DELETE |
 | `/v1/calendars` | GET, POST |
 | `/v1/calendars/{id}` | GET, PATCH, DELETE |
+| `/v1/goals` | GET, POST |
+| `/v1/goals/{id}` | GET, PATCH, DELETE |
+| `/v1/goal_categories` | GET, POST |
+| `/v1/goal_categories/{id}` | GET, PATCH, DELETE |
 | `/v1/history` | GET: the newest 200 overwritten or deleted versions |
 
 Lists return arrays with no pagination and no guaranteed order, so filter and sort them yourself. Single resources return objects. Errors look like `{"error":"message"}`.
@@ -54,6 +58,10 @@ Lists return arrays with no pagination and no guaranteed order, so filter and so
 **Note:** `title` (required, max 500), `content` (Markdown, default empty), `pinned` (boolean).
 
 **Calendar:** `name` (required, max 100), `color` (`#rrggbb`, default `#a7c968`).
+
+**Goal:** `name` (required, max 200), `description` (string or null), `importance` (whole number 1-10, default 5), `weekly_target` (null or 1-100 tasks a week), `status` (`active`, `paused`, `done`), `category_id` (a goal category's ID, or null).
+
+**Goal category:** `name` (required, max 60), `color` (`#rrggbb`, default `#6c4dff`). Deleting one leaves its goals alone; a goal whose `category_id` matches no category counts as uncategorised.
 
 Synced records can also hold `0`/`1` for booleans and `medium`/`high` for priority. Leave those alone unless you are changing them.
 

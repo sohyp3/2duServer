@@ -184,8 +184,13 @@ export function createStore(db: Database) {
                 importance: 5,
                 weekly_target: null,
                 status: 'active',
+                category_id: null,
               }
-            : { color: '#a7c968' };
+            : entity === 'goal_categories'
+              ? { color: '#6c4dff' }
+              : entity === 'calendars'
+                ? { color: '#a7c968' }
+                : {};
     const data = {
       ...defaults,
       ...old,
