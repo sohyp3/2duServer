@@ -85,6 +85,15 @@ Keys are managed with a session token:
 - `GET /v1/keys` lists non-session keys: `[{id, name, scope, created_at, expires, last_used, meta}]`. `last_used` is a UTC ISO time updated at most once an hour, or null if never used.
 - `DELETE /v1/keys/{id}` revokes a key.
 
+## Calendar feed (`feed` keys)
+
+`GET /feed/{key}.ics` (no `Authorization` header; the key is in the URL) returns the account's tasks as an iCalendar (RFC 5545) feed that Google, Apple and Outlook Calendar can subscribe to. Create the key with `POST /v1/keys` `{"name":"Calendar","scope":"feed"}`, then subscribe to `https://<host>/feed/<key>.ics`. Apple and Outlook also accept it as `webcal://<host>/feed/<key>.ics` (replace `https://` with `webcal://`); in Google Calendar use "From URL" with the `https://` link.
+
+- Includes tasks dated from 60 days ago to 365 days ahead, excluding cancelled tasks and subtasks. Each task is a UTC event from `datetime` lasting `time_needed` minutes (30 when unset); completed tasks are prefixed with `✓ `. No time zones or recurrence.
+- Filter: create the key with `calendar_ids` to include only those calendars. The feed is then named `2du (<calendar names>)`, otherwise `2du`.
+- Response: `text/calendar; charset=utf-8`, `Cache-Control: private, max-age=300`. Limited to 60 requests per key per hour (429).
+- A key that does not exist, is not a `feed` key, or has expired gets 404 `Not found`. Revoke the key with `DELETE /v1/keys/{id}` to stop the feed.
+
 ## Standalone server limits
 
 See [server operations](../README.md) for request sizes, registration configuration, throttles, account quotas, history retention, backup, and HTTPS deployment. Requests with JSON bodies must use `Content-Type: application/json`. Unsupported routes return 404. Throttled requests return 429 and `Retry-After`; size violations return 413, unsupported content types return 415, and account quota conflicts return 409. Sync payloads allow only `changes`; change objects allow only `entity`, `id`, `data`, and `updated_at`.

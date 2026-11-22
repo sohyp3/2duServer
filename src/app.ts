@@ -20,6 +20,7 @@ import { busyFromTodos, computeSlots, isSlotFree } from './slots';
 import { localDate } from './tz';
 import { buildBrief, saveBrief } from './brief';
 import { readPrefs, writePrefs } from './prefs';
+import { buildIcs } from './feed';
 import { pick, scoreCandidates } from './pick';
 import { HttpError, RateLimiter, readObject, exactFields } from './security';
 
@@ -151,6 +152,54 @@ export function createApp(
                 "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
             },
           });
+      }
+      const feedKey =
+        req.method === 'GET' &&
+        parts[0] === 'feed' &&
+        parts.length === 2 &&
+        /^([a-f0-9]{64})\.ics$/.exec(parts[1])?.[1];
+      if (feedKey) {
+        const tokenHash = hash(feedKey);
+        const feed = db
+          .query('SELECT * FROM tokens WHERE hash=?')
+          .get(tokenHash) as any;
+        if (
+          !feed ||
+          feed.scope !== 'feed' ||
+          (feed.expires && feed.expires <= Date.now())
+        )
+          return send({ error: 'Not found' }, 404);
+        if (!requests.allow(`feed:${tokenHash}`, 60, 3_600_000)) {
+          headers['Retry-After'] = '600';
+          return send({ error: 'Too many requests' }, 429);
+        }
+        if (
+          !feed.last_used ||
+          Date.now() - Date.parse(feed.last_used) > 3_600_000
+        )
+          db.query('UPDATE tokens SET last_used=? WHERE hash=?').run(
+            new Date().toISOString(),
+            tokenHash
+          );
+        const calendarIds: string[] | undefined = feed.meta
+          ? JSON.parse(feed.meta)?.calendar_ids
+          : undefined;
+        const names = (calendarIds ?? [])
+          .map((id) => store.get(feed.user_id, 'calendars', id)?.name)
+          .filter((n): n is string => typeof n === 'string');
+        const ics = buildIcs(store.list(feed.user_id, 'todos') as any[], {
+          name: names.length ? `2du (${names.join(', ')})` : '2du',
+          now: new Date(),
+          calendarIds,
+        });
+        return new Response(ics, {
+          headers: {
+            'Content-Type': 'text/calendar; charset=utf-8',
+            'Cache-Control': 'private, max-age=300',
+            'Content-Disposition': 'inline; filename="2du.ics"',
+            'X-Content-Type-Options': 'nosniff',
+          },
+        });
       }
       const validRoute =
         /^\/v1\/(?:auth\/(?:login|register)|session|sync|history|pick|prefs|brief|booking(?:\/[a-z0-9-]{3,40})?|public\/booking\/[a-z0-9-]{3,40}|agent\/booking(?:\/[a-z0-9-]{3,40})?|keys(?:\/[a-f0-9]{64})?|(?:todos|notes|calendars|goals|briefs)(?:\/[\w-]{1,128})?)$/.test(
